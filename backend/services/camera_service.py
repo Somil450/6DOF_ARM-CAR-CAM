@@ -4,10 +4,11 @@ Consumes http://<CAMERA_IP>:80/stream, buffers freshest frame, proxies to client
 """
 import time
 import threading
+import asyncio
 import requests
 import cv2
 import numpy as np
-from typing import Optional, Tuple, Dict, Any, Generator
+from typing import Optional, Tuple, Dict, Any, Generator, AsyncGenerator
 from backend.config import config
 from backend.schemas import Subsystem, DeviceStatus
 from backend.services.log_service import log_service
@@ -122,61 +123,52 @@ class CameraService:
                     frame_count = 0
                     last_fps_calc = time.monotonic()
 
-                    for chunk in resp.iter_content(chunk_size=8192):
+                    for chunk in resp.iter_content(chunk_size=32768):
                         if self.stop_event.is_set():
                             break
                         if not chunk:
                             continue
                         buffer.extend(chunk)
 
-                        # Drop older frames if multiple arrived in buffer to prevent lag
-                        last_s = buffer.rfind(JPEG_START)
-                        if last_s > 0:
-                            e_check = buffer.find(JPEG_END, last_s + 2)
-                            if e_check > 0:
-                                del buffer[:last_s]
+                        # Find the LAST complete frame in the buffer (skipping all older frames!)
+                        last_e = buffer.rfind(JPEG_END)
+                        if last_e >= 0:
+                            last_s = buffer.rfind(JPEG_START, 0, last_e)
+                            if last_s >= 0:
+                                # We have a complete frame. Discard ALL bytes before it!
+                                if last_s > 0:
+                                    del buffer[:last_s]
+                                    last_e -= last_s
+                                    last_s = 0
 
-                        # Prevent unbounded memory
-                        if len(buffer) > 1_000_000:
+                                jpeg_bytes = bytes(buffer[:last_e + 2])
+                                del buffer[:last_e + 2]
+
+                                # Decode only this freshest frame
+                                img = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+                                if img is not None:
+                                    now = time.time()
+                                    with self.lock:
+                                        self.latest_frame = img
+                                        self.latest_jpeg = jpeg_bytes
+                                        self.frame_id += 1
+                                        self.frame_time = now
+                                        self.last_seen = now
+                                    frame_count += 1
+
+                                    now_m = time.monotonic()
+                                    if now_m - last_fps_calc >= 1.0:
+                                        self.fps = frame_count / (now_m - last_fps_calc)
+                                        frame_count = 0
+                                        last_fps_calc = now_m
+
+                        # Safety cap: prevent unbounded memory
+                        if len(buffer) > 500_000:
                             s = buffer.rfind(JPEG_START)
                             if s >= 0:
                                 del buffer[:s]
                             else:
                                 buffer.clear()
-
-                        while True:
-                            s = buffer.find(JPEG_START)
-                            if s < 0:
-                                if len(buffer) > 1:
-                                    del buffer[:-1]
-                                break
-                            if s > 0:
-                                del buffer[:s]
-
-                            e = buffer.find(JPEG_END, 2)
-                            if e < 0:
-                                break
-
-                            jpeg_bytes = bytes(buffer[:e + 2])
-                            del buffer[:e + 2]
-
-                            # Decode only the newest frame
-                            img = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-                            if img is not None:
-                                now = time.time()
-                                with self.lock:
-                                    self.latest_frame = img
-                                    self.latest_jpeg = jpeg_bytes
-                                    self.frame_id += 1
-                                    self.frame_time = now
-                                    self.last_seen = now
-                                frame_count += 1
-
-                                now_m = time.monotonic()
-                                if now_m - last_fps_calc >= 1.0:
-                                    self.fps = frame_count / (now_m - last_fps_calc)
-                                    frame_count = 0
-                                    last_fps_calc = now_m
 
             except Exception as err:
                 self.online = False
@@ -225,8 +217,8 @@ class CameraService:
                 self.frame_id += 1
                 self.frame_time = time.time()
 
-    def generate_mjpeg_stream(self) -> Generator[bytes, None, None]:
-        """Generator yielding MJPEG multipart boundaries with zero queue lag"""
+    async def generate_mjpeg_stream(self) -> AsyncGenerator[bytes, None]:
+        """Async generator yielding MJPEG multipart boundaries with zero queue lag"""
         last_yielded_id = -1
         while not self.stop_event.is_set():
             with self.lock:
@@ -240,7 +232,7 @@ class CameraService:
                     b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
                     + jpeg + b"\r\n"
                 )
-            time.sleep(0.01)
+            await asyncio.sleep(0.015)
 
 # Global camera service instance
 camera_service = CameraService()

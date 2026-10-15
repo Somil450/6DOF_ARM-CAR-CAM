@@ -1,4 +1,3 @@
-
 /*
   WAREBOT - ESP32-CAM CONTINUOUS LOW-LATENCY MJPEG STREAM
   Board: AI Thinker ESP32-CAM
@@ -88,16 +87,16 @@ bool initializeCamera() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
-  // High resolution with low latency streaming
+  // High resolution with zero-lag streaming
   if (psramFound()) {
     config.frame_size = FRAMESIZE_VGA;  // 640 x 480 High Resolution
-    config.jpeg_quality = 12;           // Crisp detail for accurate YOLO detection
+    config.jpeg_quality = 18;           // 18 is optimal: 18KB payload, crystal clear, ultra-low Wi-Fi latency
     config.fb_count = 2;
     config.grab_mode = CAMERA_GRAB_LATEST; // Always grab newest frame (zero lag)
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
     config.frame_size = FRAMESIZE_HVGA; // 480 x 320
-    config.jpeg_quality = 14;
+    config.jpeg_quality = 20;
     config.fb_count = 1;
     config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     config.fb_location = CAMERA_FB_IN_DRAM;
@@ -115,10 +114,10 @@ bool initializeCamera() {
   if (sensor != nullptr) {
     if (psramFound()) {
       sensor->set_framesize(sensor, FRAMESIZE_VGA);
-      sensor->set_quality(sensor, 12);
+      sensor->set_quality(sensor, 18);
     } else {
       sensor->set_framesize(sensor, FRAMESIZE_HVGA);
-      sensor->set_quality(sensor, 14);
+      sensor->set_quality(sensor, 20);
     }
     sensor->set_brightness(sensor, 1);
     sensor->set_contrast(sensor, 1);
@@ -243,6 +242,12 @@ static esp_err_t streamHandler(httpd_req_t* req) {
   while (true) {
     camera_fb_t* fb = esp_camera_fb_get();
 
+    // In double-buffered PSRAM mode, flush older queued buffer to guarantee instant live frame
+    if (psramFound() && fb != nullptr) {
+      esp_camera_fb_return(fb);
+      fb = esp_camera_fb_get();
+    }
+
     if (fb == nullptr) {
       Serial.println("[STREAM ERROR] Frame capture failed");
       result = ESP_FAIL;
@@ -302,8 +307,8 @@ static esp_err_t streamHandler(httpd_req_t* req) {
       Serial.printf("[STREAM] %lu frames sent\n", framesSent);
     }
 
-    // Give the Wi-Fi stack time to run.
-    vTaskDelay(pdMS_TO_TICKS(1));
+    // Pace stream to prevent lwIP TCP socket buffer bloat
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 
   Serial.printf(

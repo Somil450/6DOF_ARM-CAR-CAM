@@ -297,7 +297,7 @@ class Camera:
                     self.connected = True
                     buffer = bytearray()
 
-                    for chunk in response.iter_content(chunk_size=4096):
+                    for chunk in response.iter_content(chunk_size=32768):
                         if self.stop_event.is_set():
                             break
 
@@ -306,47 +306,38 @@ class Camera:
 
                         buffer.extend(chunk)
 
-                        # Recover from malformed/oversized stream buffers.
-                        if len(buffer) > 2_000_000:
-                            start = buffer.rfind(JPEG_START)
+                        # Find the LAST complete frame in the buffer (skipping all older frames!)
+                        last_e = buffer.rfind(JPEG_END)
+                        if last_e >= 0:
+                            last_s = buffer.rfind(JPEG_START, 0, last_e)
+                            if last_s >= 0:
+                                # We have a complete frame. Discard ALL bytes before it!
+                                if last_s > 0:
+                                    del buffer[:last_s]
+                                    last_e -= last_s
+                                    last_s = 0
 
+                                jpeg_bytes = bytes(buffer[:last_e + 2])
+                                del buffer[:last_e + 2]
+
+                                image = cv2.imdecode(
+                                    np.frombuffer(jpeg_bytes, dtype=np.uint8),
+                                    cv2.IMREAD_COLOR,
+                                )
+
+                                if image is not None:
+                                    with self.lock:
+                                        self.frame = image
+                                        self.frame_id += 1
+                                        self.frame_time = time.monotonic()
+
+                        # Safety cap: recover from malformed/oversized stream buffers.
+                        if len(buffer) > 500_000:
+                            start = buffer.rfind(JPEG_START)
                             if start >= 0:
                                 del buffer[:start]
                             else:
                                 buffer.clear()
-
-                        while True:
-                            start = buffer.find(JPEG_START)
-
-                            if start < 0:
-                                if len(buffer) > 1:
-                                    del buffer[:-1]
-                                break
-
-                            if start > 0:
-                                del buffer[:start]
-
-                            end = buffer.find(JPEG_END, 2)
-
-                            if end < 0:
-                                break
-
-                            jpeg = bytes(buffer[:end + 2])
-                            del buffer[:end + 2]
-
-                            image = cv2.imdecode(
-                                np.frombuffer(jpeg, dtype=np.uint8),
-                                cv2.IMREAD_COLOR,
-                            )
-
-                            if image is None:
-                                continue
-
-                            # Overwrite the previous frame: no backlog.
-                            with self.lock:
-                                self.frame = image
-                                self.frame_id += 1
-                                self.frame_time = time.monotonic()
 
                     if not self.stop_event.is_set():
                         raise ConnectionError("Camera stream ended")

@@ -182,7 +182,12 @@ async def get_camera_mjpeg_stream():
     return StreamingResponse(
         camera_service.generate_mjpeg_stream(),
         media_type="multipart/x-mixed-replace; boundary=frame",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+        }
     )
 
 @app.get("/api/camera/snapshot")
