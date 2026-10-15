@@ -12,13 +12,56 @@ from backend.schemas import Subsystem, DeviceStatus
 from backend.services.log_service import log_service
 from backend.services.camera_service import camera_service
 
+COCO_NAMES = {
+    0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus', 6: 'train', 7: 'truck',
+    8: 'boat', 9: 'traffic light', 10: 'fire hydrant', 11: 'stop sign', 12: 'parking meter', 13: 'bench',
+    14: 'bird', 15: 'cat', 16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow', 20: 'elephant', 21: 'bear',
+    22: 'zebra', 23: 'giraffe', 24: 'backpack', 25: 'umbrella', 26: 'handbag', 27: 'tie', 28: 'suitcase',
+    29: 'frisbee', 30: 'skis', 31: 'snowboard', 32: 'sports ball', 33: 'kite', 34: 'baseball bat',
+    35: 'baseball glove', 36: 'skateboard', 37: 'surfboard', 38: 'tennis racket', 39: 'bottle',
+    40: 'wine glass', 41: 'cup', 42: 'fork', 43: 'knife', 44: 'spoon', 45: 'bowl', 46: 'banana',
+    47: 'apple', 48: 'sandwich', 49: 'orange', 50: 'broccoli', 51: 'carrot', 52: 'hot dog', 53: 'pizza',
+    54: 'donut', 55: 'cake', 56: 'chair', 57: 'couch', 58: 'potted plant', 59: 'bed', 60: 'dining table',
+    61: 'toilet', 62: 'tv', 63: 'laptop', 64: 'mouse', 65: 'remote', 66: 'keyboard', 67: 'cell phone',
+    68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink', 72: 'refrigerator', 73: 'book', 74: 'clock',
+    75: 'vase', 76: 'scissors', 77: 'teddy bear', 78: 'hair drier', 79: 'toothbrush'
+}
+
+TARGET_MAP: Dict[str, Optional[List[int]]] = {
+    "bottle": [39],
+    "cup": [41],
+    "glass": [40, 41],
+    "wine glass": [40],
+    "bowl": [45],
+    "cell phone": [67],
+    "phone": [67],
+    "mobile": [67],
+    "box": [28, 24, 26, 73],        # Suitcase, backpack, handbag, book (standard parcel/package shapes in COCO)
+    "carton": [28, 24, 26, 73],
+    "package": [28, 24, 26, 73],
+    "parcel": [28, 24, 26, 73],
+    "handkerchief": [26, 24, 27],      # Handbag, backpack, tie (textile/fabric proxies in COCO)
+    "cloth": [26, 24, 27],
+    "fabric": [26, 24, 27],
+    "chair": [56],
+    "laptop": [63],
+    "mouse": [64],
+    "keyboard": [66],
+    "remote": [65],
+    "book": [73],
+    "person": [0],
+    "any": None,                        # None means predict on all 80 COCO classes
+    "*": None,
+}
+
 class VisionService:
     def __init__(self):
         self.model = None
         self.model_loaded = False
         self.model_load_error: Optional[str] = None
         
-        self.selected_target: str = "bottle" # default
+        self.selected_target: str = "bottle"
+        self.selected_target_classes: Optional[List[int]] = [39]
         self.target_supported: bool = True
         
         self.latest_detection: Optional[Dict[str, Any]] = None
@@ -73,26 +116,40 @@ class VisionService:
         target = target_class.strip().lower()
         self.selected_target = target
         
-        # Determine whether target is supported by COCO yolov8n.pt
-        # In COCO: class 39 is bottle. Boxes and handkerchiefs do not exist in COCO-80!
-        supported_coco_classes = {"bottle": 39, "cup": 41, "cell phone": 67, "chair": 56}
-        
-        if target == "bottle":
+        if target in TARGET_MAP:
+            self.selected_target_classes = TARGET_MAP[target]
             self.target_supported = True
-            msg = "Target set to BOTTLE (COCO Class 39) - Fully supported for autonomous tracking & pickup"
-        elif target == "any":
-            self.target_supported = True
-            msg = "Target set to ANY COCO OBJECT - Tracking enabled, manual confirmation required for pickup"
+            if target in ("any", "*"):
+                msg = "Target set to ANY OBJECT - Tracking all detectable items"
+            elif target in ("box", "carton", "package", "parcel"):
+                msg = f"Target set to {target.upper()} (Parcel/Carton proxies: suitcase, backpack, package)"
+            elif target in ("handkerchief", "cloth", "fabric"):
+                msg = f"Target set to {target.upper()} (Textile/Cloth proxies: handbag, fabric)"
+            else:
+                msg = f"Target set to {target.upper()} (COCO class: {self.selected_target_classes})"
         else:
-            self.target_supported = False
-            msg = f"Target '{target}' is UNSUPPORTED by standard COCO YOLOv8. Custom training weights required. Autonomous pickup disabled."
-            log_service.warning(Subsystem.VISION, "UNSUPPORTED_TARGET_CLASS", msg)
-            return {
-                "success": True,
-                "target_class": target,
-                "supported": False,
-                "message": msg
-            }
+            # Check against COCO-80 dictionary
+            matched_id = None
+            for cid, cname in COCO_NAMES.items():
+                if cname.lower() == target:
+                    matched_id = cid
+                    break
+            
+            if matched_id is not None:
+                self.selected_target_classes = [matched_id]
+                self.target_supported = True
+                msg = f"Target set to {target.upper()} (COCO Class {matched_id})"
+            else:
+                self.selected_target_classes = None
+                self.target_supported = False
+                msg = f"Target '{target}' is not recognized in object detector model."
+                log_service.warning(Subsystem.VISION, "UNSUPPORTED_TARGET_CLASS", msg)
+                return {
+                    "success": True,
+                    "target_class": target,
+                    "supported": False,
+                    "message": msg
+                }
             
         log_service.info(Subsystem.VISION, "TARGET_UPDATED", msg)
         return {
@@ -117,8 +174,11 @@ class VisionService:
             "model_path": config.yolo_model_path,
             "selected_target": self.selected_target,
             "target_supported": self.target_supported,
-            "supported_classes": ["bottle", "any"],
-            "unsupported_classes": ["box", "handkerchief", "custom_parcel"],
+            "supported_classes": [
+                "bottle", "box", "cup", "cell phone", "handkerchief",
+                "chair", "laptop", "mouse", "book", "person", "any"
+            ],
+            "unsupported_classes": [],
             "fps": round(self.inference_fps, 1),
             "target_visible": is_active,
             "detection": self.latest_detection if is_active else None,
@@ -168,8 +228,8 @@ class VisionService:
             now = time.time()
 
             try:
-                # Class filter: 39 for bottle if selected
-                classes_arg = [39] if self.selected_target == "bottle" else None
+                # Class filter: dynamic classes based on selected target
+                classes_arg = self.selected_target_classes
                 
                 results = self.model.predict(
                     source=frame,
@@ -228,19 +288,19 @@ class VisionService:
                 self.stop_event.wait(0.05)
 
     def _run_simulated_detection(self):
-        """Provides simulated bounding box matching camera synthetic bottle"""
+        """Provides simulated bounding box matching camera frame dimensions"""
         now = time.time()
         self.inference_fps = 20.0
         
-        if self.selected_target == "bottle" or self.selected_target == "any":
+        if self.target_supported:
             t = now
-            offset_x = int(np.sin(t * 1.5) * 15)
-            bx1, by1 = 70 + offset_x, 30
-            bx2, by2 = 95 + offset_x, 95
+            offset_x = int(np.sin(t * 1.5) * 20)
+            bx1, by1 = 280 + offset_x, 180
+            bx2, by2 = 360 + offset_x, 340
             
             sim_det = {
-                "class_id": 39,
-                "class_name": "bottle",
+                "class_id": 39 if self.selected_target == "bottle" else 28,
+                "class_name": self.selected_target if self.selected_target != "any" else "bottle",
                 "confidence": 0.89,
                 "box": [bx1, by1, bx2, by2],
                 "center": [(bx1 + bx2) // 2, (by1 + by2) // 2],

@@ -24,8 +24,8 @@ BOTTLE_CLASS = 39
 STOP_DISTANCE_CM = 25.0
 
 # Detection settings
-YOLO_CONF = 0.12
-YOLO_SIZE = 640
+YOLO_CONF = 0.25
+YOLO_SIZE = 416
 YOLO_IOU = 0.45
 
 # Connection and safety settings
@@ -38,7 +38,7 @@ CAMERA_READ_TIMEOUT = 30
 
 DISTANCE_POLL_INTERVAL = 0.25
 STATUS_POLL_INTERVAL = 0.75
-FORWARD_RETRY_INTERVAL = 0.8
+FORWARD_RETRY_INTERVAL = 0.25
 
 # Tolerate brief detection misses
 DETECTION_HOLD_SECONDS = 0.7
@@ -641,10 +641,6 @@ def main():
                 movement = "EMERGENCY STOP"
                 car.command("STOP")
 
-            elif distance is None:
-                movement = "WAIT DISTANCE"
-                car.command("STOP")
-
             elif status is None:
                 movement = "WAIT CAR STATUS"
                 car.command("STOP")
@@ -654,16 +650,27 @@ def main():
                 # Leave pickup and reverse logic to the ESP32.
 
             elif bottle_visible:
-                if distance <= STOP_DISTANCE_CM:
-                    movement = "STOP AT 25 CM"
+                # Target detected! If confirmed at or below stop threshold, halt car
+                if distance is not None and 0.0 < distance <= STOP_DISTANCE_CM:
+                    movement = f"STOPPED AT TARGET ({distance:.1f} CM)"
                     car.command("STOP")
-                elif status in ("READY", "MOVING_ALLOWED", "MOVING"):
-                    accepted = car.command("FORWARD")
-                    movement = (
-                        "FORWARD"
-                        if accepted
-                        else "FORWARD REJECTED - CHECK ESP32"
-                    )
+                elif status in ("READY", "MOVING_ALLOWED", "MOVING", "MOVING_FORWARD", "TURNING_LEFT", "TURNING_RIGHT"):
+                    # Visual servoing: steer towards bottle center
+                    frame_w = frame.shape[1] if hasattr(frame, "shape") else 640
+                    cx = (last_detection["x1"] + last_detection["x2"]) // 2 if last_detection else frame_w // 2
+                    left_bound = frame_w * 0.38
+                    right_bound = frame_w * 0.62
+
+                    if cx < left_bound:
+                        desired_cmd = "LEFT"
+                    elif cx > right_bound:
+                        desired_cmd = "RIGHT"
+                    else:
+                        desired_cmd = "FORWARD"
+
+                    accepted = car.command(desired_cmd)
+                    dist_txt = f"{distance:.1f}cm" if distance is not None else "clear"
+                    movement = f"{desired_cmd} ({dist_txt})" if accepted else f"{desired_cmd} REJECTED: {status}"
                 else:
                     movement = f"CAR NOT READY: {status}"
                     car.command("STOP")

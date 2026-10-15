@@ -97,14 +97,14 @@ class MissionService:
         if self.emergency_stop:
             return {"success": False, "error": "Cannot start mission: Emergency stop is active."}
 
-        # Check target support
-        if target_class.lower() not in {"bottle", "any"}:
+        # Check target support via vision service
+        target_res = vision_service.set_target(target_class)
+        if not target_res.get("supported"):
             return {
                 "success": False,
-                "error": f"Target '{target_class}' is unsupported by the current model. Custom training required."
+                "error": target_res.get("message", f"Target '{target_class}' is unsupported by the current model.")
             }
 
-        vision_service.set_target(target_class)
         self.active_target = target_class
         self.transition_to("FOLLOWING", f"Autonomous tracking of '{target_class}' active.")
         
@@ -135,66 +135,84 @@ class MissionService:
         return {"success": True, "state": self.state}
 
     async def _mission_loop(self):
-        """Asynchronous mission monitor loop running at ~10Hz"""
+        """Asynchronous mission monitor loop running at ~12Hz with visual servoing"""
         log_service.info(Subsystem.MISSION, "LOOP_STARTED", "Autonomous mission worker started")
         
-        last_fwd_sent = 0.0
+        last_cmd_sent = 0.0
+        last_active_cmd = "STOP"
         
         while self.state == "FOLLOWING" and not self.emergency_stop:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.08)
             now = time.time()
             
             # Check camera freshness
             cam_telem = camera_service.get_telemetry()
             if not cam_telem.get("online") or not cam_telem.get("frame_fresh"):
-                car_service.send_command("STOP")
+                if last_active_cmd != "STOP":
+                    car_service.send_command("STOP", force=True)
+                    last_active_cmd = "STOP"
                 self.current_step = "Camera stream lost or stale. Car paused."
-                continue
-
-            # Check distance reading
-            car_telem = car_service.get_telemetry()
-            distance = car_telem.get("distance_cm")
-            car_state = car_telem.get("state")
-
-            if distance is None or not car_telem.get("distance_fresh"):
-                car_service.send_command("STOP")
-                self.current_step = "Waiting for valid ultrasonic distance reading..."
-                continue
-
-            # Check if car is already executing pickup/reverse in firmware
-            if car_state in PICKUP_STATES:
-                self.current_step = f"Firmware sequence active: {car_state}"
                 continue
 
             # Check vision detection
             vis_telem = vision_service.get_telemetry()
             target_visible = vis_telem.get("target_visible")
+            detection = vis_telem.get("detection")
 
-            if not target_visible:
-                # Target not visible: car must remain stopped
-                car_service.send_command("STOP")
-                self.current_step = f"Searching for {self.active_target}... Car stopped."
+            if not target_visible or detection is None:
+                # Target not visible: car pauses and searches
+                if last_active_cmd != "STOP":
+                    car_service.send_command("STOP", force=True)
+                    last_active_cmd = "STOP"
+                self.current_step = f"Searching for {self.active_target}... (Waiting for detection)"
                 continue
 
-            # Target IS visible and distance IS valid
-            if distance <= config.stop_distance_cm:
-                car_service.send_command("STOP")
+            # Target IS visible! Check ultrasonic proximity
+            car_telem = car_service.get_telemetry()
+            distance = car_telem.get("distance_cm")
+            car_state = car_telem.get("state")
+
+            # Check if threshold reached (only if distance is confirmed <= stop_distance_cm)
+            if distance is not None and 0.0 < distance <= config.stop_distance_cm:
+                car_service.send_command("STOP", force=True)
+                last_active_cmd = "STOP"
                 self.transition_to(
                     "STOPPED_AT_TARGET",
                     f"Reached stop threshold ({distance:.1f} cm <= {config.stop_distance_cm} cm). Ready for pickup."
                 )
                 break
+
+            # Target is visible and path is clear (distance is None/open or > 25cm)
+            # Perform visual steering towards target
+            cx = detection.get("center", [320, 240])[0]
+            frame_w = 640
+            if detection.get("box"):
+                frame_w = max(640, detection["box"][2])
+                
+            left_bound = frame_w * 0.38
+            right_bound = frame_w * 0.62
+
+            desired_cmd = "FORWARD"
+            if cx < left_bound:
+                desired_cmd = "LEFT"
+                action_text = f"Steering LEFT towards {self.active_target}"
+            elif cx > right_bound:
+                desired_cmd = "RIGHT"
+                action_text = f"Steering RIGHT towards {self.active_target}"
             else:
-                # Safe to move forward
-                if car_state in {"READY", "MOVING_ALLOWED"}:
-                    # Rate-limit forward requests
-                    if now - last_fwd_sent >= 0.7:
-                        res = car_service.send_command("FORWARD")
-                        last_fwd_sent = now
-                        if res.get("success"):
-                            self.current_step = f"Approaching {self.active_target} (Distance: {distance:.1f} cm)"
-                        else:
-                            self.current_step = f"Forward rejected: {res.get('reply') or res.get('error')}"
+                desired_cmd = "FORWARD"
+                dist_str = f"{distance:.1f} cm" if distance is not None else "clear path"
+                action_text = f"Moving FORWARD towards {self.active_target} ({dist_str})"
+
+            # Send command with keep-alive interval (every 0.2s to stay well under 0.6s watchdog)
+            if desired_cmd != last_active_cmd or (now - last_cmd_sent >= 0.2):
+                res = car_service.send_command(desired_cmd, force=True)
+                last_cmd_sent = now
+                last_active_cmd = desired_cmd
+                if res.get("success"):
+                    self.current_step = action_text
+                else:
+                    self.current_step = f"{desired_cmd} active: {res.get('reply') or res.get('error')}"
 
         log_service.info(Subsystem.MISSION, "LOOP_EXITED", f"Mission loop ended in state: {self.state}")
 

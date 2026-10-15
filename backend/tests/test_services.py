@@ -67,13 +67,21 @@ def test_vision_target_support():
     res_bottle = vision_service.set_target("bottle")
     assert res_bottle["supported"] is True
 
-    # Box is unsupported in base COCO
+    # Box is supported via parcel/container proxies
     res_box = vision_service.set_target("box")
-    assert res_box["supported"] is False
+    assert res_box["supported"] is True
 
-    # Handkerchief is unsupported
+    # Handkerchief is supported via fabric proxies
     res_hk = vision_service.set_target("handkerchief")
-    assert res_hk["supported"] is False
+    assert res_hk["supported"] is True
+
+    # Cup is supported
+    res_cup = vision_service.set_target("cup")
+    assert res_cup["supported"] is True
+
+    # Unrecognized target is cleanly rejected
+    res_bad = vision_service.set_target("unrecognized_object_xyz")
+    assert res_bad["supported"] is False
 
 def test_emergency_stop_lifecycle():
     # Engage emergency stop

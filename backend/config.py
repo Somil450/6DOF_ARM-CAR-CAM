@@ -44,10 +44,10 @@ class DeviceConfig(BaseModel):
     
     # Vision & YOLO settings
     yolo_model_path: str = "yolov8n.pt"
-    yolo_confidence: float = 0.12
+    yolo_confidence: float = 0.25
     yolo_iou: float = 0.45
-    yolo_size: int = 640
-    supported_classes: List[str] = Field(default_factory=lambda: ["bottle"])
+    yolo_size: int = 416
+    supported_classes: List[str] = Field(default_factory=lambda: ["bottle", "cup", "cell phone", "chair", "box", "any"])
     
     # Operating Mode: False = Real Physical Hardware, True = Clearly Labeled Simulation
     simulation_mode: bool = False

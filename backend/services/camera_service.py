@@ -79,23 +79,28 @@ class CameraService:
     def get_telemetry(self) -> Dict[str, Any]:
         now = time.time()
         is_fresh = (now - self.frame_time <= config.camera_stale_seconds) if self.frame_time > 0 else False
+        res_str = "640x480 (VGA)"
+        with self.lock:
+            if self.latest_frame is not None:
+                h, w = self.latest_frame.shape[:2]
+                res_str = f"{w}x{h}"
         return {
             "online": self.online if not config.simulation_mode else True,
             "fps": round(self.fps, 1),
             "frame_fresh": is_fresh,
             "frame_id": self.frame_id,
             "stream_url": f"http://{config.camera_ip}:{config.camera_port}{config.camera_stream_path}",
-            "resolution": "160x120 (QQVGA)",
+            "resolution": res_str,
         }
 
     def _run_stream(self):
-        """Worker loop continuously pulling MJPEG from ESP32-CAM or generating simulated feed"""
+        """Worker loop continuously pulling MJPEG from ESP32-CAM with zero queue latency"""
         stream_url = f"http://{config.camera_ip}:{config.camera_port}{config.camera_stream_path}"
         
         while not self.stop_event.is_set():
             if config.simulation_mode:
                 self._generate_simulation_frame()
-                self.stop_event.wait(0.04) # ~25 FPS
+                self.stop_event.wait(0.04)
                 continue
 
             try:
@@ -117,15 +122,22 @@ class CameraService:
                     frame_count = 0
                     last_fps_calc = time.monotonic()
 
-                    for chunk in resp.iter_content(chunk_size=4096):
+                    for chunk in resp.iter_content(chunk_size=8192):
                         if self.stop_event.is_set():
                             break
                         if not chunk:
                             continue
                         buffer.extend(chunk)
 
+                        # Drop older frames if multiple arrived in buffer to prevent lag
+                        last_s = buffer.rfind(JPEG_START)
+                        if last_s > 0:
+                            e_check = buffer.find(JPEG_END, last_s + 2)
+                            if e_check > 0:
+                                del buffer[:last_s]
+
                         # Prevent unbounded memory
-                        if len(buffer) > 1_500_000:
+                        if len(buffer) > 1_000_000:
                             s = buffer.rfind(JPEG_START)
                             if s >= 0:
                                 del buffer[:s]
@@ -148,7 +160,7 @@ class CameraService:
                             jpeg_bytes = bytes(buffer[:e + 2])
                             del buffer[:e + 2]
 
-                            # Decode frame
+                            # Decode only the newest frame
                             img = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
                             if img is not None:
                                 now = time.time()
@@ -174,39 +186,38 @@ class CameraService:
                     self.stop_event.wait(1.5)
 
     def _generate_simulation_frame(self):
-        """Generates realistic synthetic 160x120 QQVGA frame with timestamp and simulated bottle"""
+        """Generates realistic synthetic 640x480 frame with timestamp and simulated bottle"""
         self.online = True
         self.latency_ms = 1.8
         self.last_seen = time.time()
         self.fps = 25.0
 
-        # Create black canvas
-        img = np.zeros((120, 160, 3), dtype=np.uint8)
-        img[:] = (15, 15, 15) # Dark gray background
+        # Create 640x480 canvas
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        img[:] = (20, 20, 20)
 
-        # Grid lines
-        for y in range(0, 120, 30):
-            cv2.line(img, (0, y), (160, y), (25, 25, 25), 1)
-        for x in range(0, 160, 40):
-            cv2.line(img, (x, 0), (x, 120), (25, 25, 25), 1)
+        # Draw grid
+        for y in range(0, 480, 60):
+            cv2.line(img, (0, y), (640, y), (35, 35, 35), 1)
+        for x in range(0, 640, 80):
+            cv2.line(img, (x, 0), (x, 480), (35, 35, 35), 1)
 
-        # Draw simulated bottle in center-right
+        # Draw simulated bottle in center
         t = time.time()
-        offset_x = int(np.sin(t * 1.5) * 15)
-        bx1, by1 = 70 + offset_x, 30
-        bx2, by2 = 95 + offset_x, 95
+        offset_x = int(np.sin(t * 1.5) * 40)
+        bx1, by1 = 280 + offset_x, 140
+        bx2, by2 = 360 + offset_x, 380
         # Bottle body
-        cv2.rectangle(img, (bx1, by1 + 15), (bx2, by2), (180, 140, 50), -1)
+        cv2.rectangle(img, (bx1, by1 + 50), (bx2, by2), (180, 140, 50), -1)
         # Bottle neck
-        cv2.rectangle(img, (bx1 + 8, by1), (bx2 - 8, by1 + 15), (200, 160, 60), -1)
+        cv2.rectangle(img, (bx1 + 25, by1), (bx2 - 25, by1 + 50), (200, 160, 60), -1)
         # Bottle cap
-        cv2.rectangle(img, (bx1 + 7, by1 - 4), (bx2 - 7, by1), (40, 40, 220), -1)
+        cv2.rectangle(img, (bx1 + 22, by1 - 12), (bx2 - 22, by1), (40, 40, 220), -1)
 
-        # Overlay text
-        cv2.putText(img, "WAREBOT SIM CAM", (6, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 200, 0), 1)
-        cv2.putText(img, f"160x120 {time.strftime('%H:%M:%S')}", (6, 114), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (120, 120, 120), 1)
+        cv2.putText(img, "WAREBOT CAMERA FEED", (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 120), 2)
+        cv2.putText(img, f"640x480 {time.strftime('%H:%M:%S')}", (15, 465), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (160, 160, 160), 1)
 
-        ret, jpeg = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+        ret, jpeg = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
         if ret:
             with self.lock:
                 self.latest_frame = img
@@ -215,17 +226,22 @@ class CameraService:
                 self.frame_time = time.time()
 
     def generate_mjpeg_stream(self) -> Generator[bytes, None, None]:
-        """Generator yielding MJPEG multipart boundaries for proxy streaming"""
+        """Generator yielding MJPEG multipart boundaries with zero queue lag"""
+        last_yielded_id = -1
         while not self.stop_event.is_set():
-            jpeg = self.get_latest_jpeg()
-            if jpeg is not None:
+            with self.lock:
+                current_id = self.frame_id
+                jpeg = self.latest_jpeg
+            if jpeg is not None and current_id != last_yielded_id:
+                last_yielded_id = current_id
                 yield (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n"
                     b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
                     + jpeg + b"\r\n"
                 )
-            time.sleep(0.04) # Yield at ~25 FPS max
+            time.sleep(0.01)
 
 # Global camera service instance
 camera_service = CameraService()
+

@@ -88,15 +88,16 @@ bool initializeCamera() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
-  // Low resolution to prioritize streaming speed.
-  config.frame_size = FRAMESIZE_QQVGA;  // 160 x 120
-  config.jpeg_quality = 12;
-
+  // High resolution with low latency streaming
   if (psramFound()) {
+    config.frame_size = FRAMESIZE_VGA;  // 640 x 480 High Resolution
+    config.jpeg_quality = 12;           // Crisp detail for accurate YOLO detection
     config.fb_count = 2;
-    config.grab_mode = CAMERA_GRAB_LATEST;
+    config.grab_mode = CAMERA_GRAB_LATEST; // Always grab newest frame (zero lag)
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
+    config.frame_size = FRAMESIZE_HVGA; // 480 x 320
+    config.jpeg_quality = 14;
     config.fb_count = 1;
     config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     config.fb_location = CAMERA_FB_IN_DRAM;
@@ -112,15 +113,20 @@ bool initializeCamera() {
   sensor_t* sensor = esp_camera_sensor_get();
 
   if (sensor != nullptr) {
-    sensor->set_framesize(sensor, FRAMESIZE_QQVGA);
-    sensor->set_quality(sensor, 12);
-    sensor->set_brightness(sensor, 0);
-    sensor->set_contrast(sensor, 0);
+    if (psramFound()) {
+      sensor->set_framesize(sensor, FRAMESIZE_VGA);
+      sensor->set_quality(sensor, 12);
+    } else {
+      sensor->set_framesize(sensor, FRAMESIZE_HVGA);
+      sensor->set_quality(sensor, 14);
+    }
+    sensor->set_brightness(sensor, 1);
+    sensor->set_contrast(sensor, 1);
     sensor->set_saturation(sensor, 0);
   }
 
   Serial.printf(
-      "[CAMERA] Initialized; PSRAM: %s; resolution: 160x120\n",
+      "[CAMERA] Initialized; PSRAM: %s; resolution: 640x480\n",
       psramFound() ? "yes" : "no"
   );
 

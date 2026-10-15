@@ -64,7 +64,7 @@ export const CameraScreen: React.FC = () => {
               )}
             </h1>
             <p className="text-xs text-text-muted font-mono">
-              Hardware: AI-Thinker OV2640 • Resolution: 160x120 QQVGA • Low Latency
+              Hardware: AI-Thinker OV2640 • Resolution: {camInfo?.resolution || '640x480 VGA'} • Zero-Lag Real-Time Stream
             </p>
           </div>
         </div>
@@ -159,81 +159,85 @@ export const CameraScreen: React.FC = () => {
               </div>
             )}
 
-            {/* SVG Dynamic Detection Overlay (160x120 native resolution coordinates) */}
-            {showOverlay && isImgLoaded && detection?.target_visible && detection.detection && (
-              <svg
-                viewBox="0 0 160 120"
-                className="absolute inset-0 w-full h-full pointer-events-none"
-                preserveAspectRatio="xMidYMid meet"
-              >
-                {/* Bounding Box */}
-                {(() => {
-                  const [x1, y1, x2, y2] = detection.detection.box;
-                  const width = x2 - x1;
-                  const height = y2 - y1;
-                  const confPercent = (detection.detection.confidence * 100).toFixed(0);
-                  return (
-                    <g>
-                      {/* Box border */}
-                      <rect
-                        x={x1}
-                        y={y1}
-                        width={width}
-                        height={height}
-                        fill="none"
-                        stroke="#22C55E"
-                        strokeWidth="1.5"
-                        strokeDasharray="4 2"
-                      />
-                      {/* Label badge */}
-                      <rect
-                        x={x1}
-                        y={Math.max(2, y1 - 10)}
-                        width={Math.max(48, detection.detection.class_name.length * 6 + 24)}
-                        height="9"
-                        fill="#22C55E"
-                        rx="1.5"
-                      />
-                      <text
-                        x={x1 + 2}
-                        y={Math.max(9, y1 - 3)}
-                        fill="#000000"
-                        fontSize="6"
-                        fontWeight="bold"
-                        fontFamily="monospace"
-                      >
-                        {detection.detection.class_name.toUpperCase()} {confPercent}%
-                      </text>
-                      {/* Center reticle */}
-                      <circle
-                        cx={detection.detection.center[0]}
-                        cy={detection.detection.center[1]}
-                        r="2.5"
-                        fill="none"
-                        stroke="#22C55E"
-                        strokeWidth="1"
-                      />
-                      <line
-                        x1={detection.detection.center[0] - 4}
-                        y1={detection.detection.center[1]}
-                        x2={detection.detection.center[0] + 4}
-                        y2={detection.detection.center[1]}
-                        stroke="#22C55E"
-                        strokeWidth="0.8"
-                      />
-                      <line
-                        x1={detection.detection.center[0]}
-                        y1={detection.detection.center[1] - 4}
-                        x2={detection.detection.center[0]}
-                        y2={detection.detection.center[1] + 4}
-                        stroke="#22C55E"
-                        strokeWidth="0.8"
-                      />
-                    </g>
-                  );
-                })()}
-              </svg>
-            )}
+            {/* SVG Dynamic Detection Overlay (Adaptive coordinate space) */}
+            {showOverlay && isImgLoaded && detection?.target_visible && detection.detection && (() => {
+              const [x1, y1, x2, y2] = detection.detection.box;
+              const vbW = Math.max(x2, 160) > 160 ? 640 : 160;
+              const vbH = vbW === 640 ? 480 : 120;
+              const width = Math.max(1, x2 - x1);
+              const height = Math.max(1, y2 - y1);
+              const confPercent = (detection.detection.confidence * 100).toFixed(0);
+              const strokeW = vbW === 640 ? 3 : 1.5;
+              const fontSz = vbW === 640 ? 14 : 6;
+              const badgeH = vbW === 640 ? 20 : 9;
+              const badgeW = Math.max(vbW === 640 ? 120 : 48, detection.detection.class_name.length * (vbW === 640 ? 10 : 6) + 32);
+
+              return (
+                <svg
+                  viewBox={`0 0 ${vbW} ${vbH}`}
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                  preserveAspectRatio="xMidYMid meet"
+                >
+                  <g>
+                    {/* Box border */}
+                    <rect
+                      x={x1}
+                      y={y1}
+                      width={width}
+                      height={height}
+                      fill="none"
+                      stroke="#22C55E"
+                      strokeWidth={strokeW}
+                      strokeDasharray="6 3"
+                    />
+                    {/* Label badge */}
+                    <rect
+                      x={x1}
+                      y={Math.max(2, y1 - badgeH - 2)}
+                      width={badgeW}
+                      height={badgeH}
+                      fill="#22C55E"
+                      rx={vbW === 640 ? 3 : 1.5}
+                    />
+                    <text
+                      x={x1 + (vbW === 640 ? 6 : 2)}
+                      y={Math.max(fontSz + 2, y1 - (vbW === 640 ? 6 : 3))}
+                      fill="#000000"
+                      fontSize={fontSz}
+                      fontWeight="bold"
+                      fontFamily="monospace"
+                    >
+                      {detection.detection.class_name.toUpperCase()} {confPercent}%
+                    </text>
+                    {/* Center reticle */}
+                    <circle
+                      cx={detection.detection.center[0]}
+                      cy={detection.detection.center[1]}
+                      r={vbW === 640 ? 5 : 2.5}
+                      fill="none"
+                      stroke="#22C55E"
+                      strokeWidth={strokeW}
+                    />
+                    <line
+                      x1={detection.detection.center[0] - (vbW === 640 ? 10 : 4)}
+                      y1={detection.detection.center[1]}
+                      x2={detection.detection.center[0] + (vbW === 640 ? 10 : 4)}
+                      y2={detection.detection.center[1]}
+                      stroke="#22C55E"
+                      strokeWidth={strokeW * 0.8}
+                    />
+                    <line
+                      x1={detection.detection.center[0]}
+                      y1={detection.detection.center[1] - (vbW === 640 ? 10 : 4)}
+                      x2={detection.detection.center[0]}
+                      y2={detection.detection.center[1] + (vbW === 640 ? 10 : 4)}
+                      stroke="#22C55E"
+                      strokeWidth={strokeW * 0.8}
+                    />
+                  </g>
+                </svg>
+              );
+            })()}
 
             {/* Stale Frame Warning Banner */}
             {!camInfo?.frame_fresh && isImgLoaded && (
