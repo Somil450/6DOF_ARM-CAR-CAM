@@ -46,10 +46,21 @@ def test_gripper_control():
     assert arm_service.commanded_angles[config.gripper_channel] == config.gripper_closed_angle
 
 def test_car_command_validation():
-    # Invalid command rejected
-    res = car_service.send_command("FLY")
-    assert res["success"] is False
-    assert "Unsupported" in res["error"]
+    orig_sim = config.simulation_mode
+    try:
+        config.simulation_mode = True
+        # Valid commands
+        for cmd in ["FORWARD", "BACKWARD", "LEFT", "RIGHT", "STOP", "RESET"]:
+            res = car_service.send_command(cmd)
+            assert res["success"] is True
+            assert res["command"] == cmd
+
+        # Invalid command rejected
+        res_bad = car_service.send_command("FLY")
+        assert res_bad["success"] is False
+        assert "Unsupported" in res_bad["error"]
+    finally:
+        config.simulation_mode = orig_sim
 
 def test_vision_target_support():
     # Bottle is supported in COCO YOLO

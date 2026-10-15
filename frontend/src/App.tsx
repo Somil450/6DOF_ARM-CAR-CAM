@@ -3,6 +3,7 @@ import { useRobotStore } from './store/useRobotStore';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { OfflineBanner } from './components/OfflineBanner';
+import { AlertTriangle, X } from 'lucide-react';
 import { DashboardScreen } from './screens/DashboardScreen';
 import { CameraScreen } from './screens/CameraScreen';
 import { CarControlScreen } from './screens/CarControlScreen';
@@ -14,7 +15,7 @@ import { HealthScreen } from './screens/HealthScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 
 export const App: React.FC = () => {
-  const { activeScreen, initWebSocket, lastError } = useRobotStore();
+  const { activeScreen, initWebSocket, lastError, dismissError, clearEmergencyStop, telemetry } = useRobotStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
@@ -57,7 +58,27 @@ export const App: React.FC = () => {
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-black">
           {lastError && (
             <div className="mb-4 p-3 rounded-xl bg-accent-red/15 border border-accent-red/30 text-accent-red text-xs font-mono flex items-center justify-between animate-fade-in">
-              <span>{lastError}</span>
+              <div className="flex items-center space-x-2">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                <span>{lastError}</span>
+              </div>
+              <div className="flex items-center space-x-2 ml-4">
+                {(lastError.toLowerCase().includes('emergency') || telemetry?.emergency_stop) && (
+                  <button
+                    onClick={() => clearEmergencyStop()}
+                    className="px-2.5 py-1 bg-accent-yellow hover:bg-yellow-400 text-black font-bold text-[11px] rounded transition-all active:scale-95 shadow"
+                  >
+                    RESET E-STOP LATCH
+                  </button>
+                )}
+                <button
+                  onClick={() => dismissError()}
+                  className="p-1 hover:bg-accent-red/20 rounded text-accent-red transition-all"
+                  title="Dismiss alert"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           )}
           {renderActiveScreen()}

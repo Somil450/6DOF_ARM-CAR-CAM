@@ -1,5 +1,5 @@
 // WAREBOT Service Worker
-const CACHE_NAME = 'warebot-cache-v1';
+const CACHE_NAME = 'warebot-cache-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -26,8 +26,9 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Pass WebSocket and real-time camera proxy directly to network
   const url = new URL(event.request.url);
+
+  // Pass WebSocket and real-time camera proxy directly to network
   if (url.pathname.startsWith('/ws') || url.pathname.startsWith('/api/camera/stream')) {
     return;
   }
@@ -45,7 +46,23 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first with network fallback for UI assets
+  // Network-first with cache fallback for HTML navigation requests
+  if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html')) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Cache-first with network fallback for static hashed assets
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {

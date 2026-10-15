@@ -136,6 +136,7 @@ interface RobotState {
   triggerPickup: () => Promise<boolean>;
   triggerEmergencyStop: () => Promise<boolean>;
   clearEmergencyStop: () => Promise<boolean>;
+  dismissError: () => void;
   fetchLogs: (filters?: { severity?: string; subsystem?: string; search?: string }) => Promise<void>;
   clearLogs: () => Promise<boolean>;
   updateSettings: (settings: Record<string, any>) => Promise<boolean>;
@@ -236,12 +237,17 @@ export const useRobotStore = create<RobotState>((set, get) => {
         });
         const data = await res.json();
         if (!res.ok) {
-          set({ lastError: data.detail || data.error || 'Car command failed' });
+          const msg = data.detail || data.error || 'Car command failed';
+          set({ lastError: msg });
+          setTimeout(() => {
+            if (get().lastError === msg) set({ lastError: null });
+          }, 5000);
           return false;
         }
         return data.success === true;
       } catch (err: any) {
         set({ lastError: err.message });
+        setTimeout(() => set({ lastError: null }), 5000);
         return false;
       }
     },
@@ -374,6 +380,9 @@ export const useRobotStore = create<RobotState>((set, get) => {
 
     triggerEmergencyStop: async () => {
       try {
+        set((state) => ({
+          telemetry: state.telemetry ? { ...state.telemetry, emergency_stop: true, system_mode: 'EMERGENCY_STOP' } : state.telemetry,
+        }));
         const res = await fetch(`${getBaseUrl()}/api/emergency_stop`, {
           method: 'POST',
         });
@@ -387,6 +396,10 @@ export const useRobotStore = create<RobotState>((set, get) => {
 
     clearEmergencyStop: async () => {
       try {
+        set((state) => ({
+          telemetry: state.telemetry ? { ...state.telemetry, emergency_stop: false, system_mode: 'MANUAL' } : state.telemetry,
+          lastError: null,
+        }));
         const res = await fetch(`${getBaseUrl()}/api/emergency_reset`, {
           method: 'POST',
         });
@@ -397,6 +410,8 @@ export const useRobotStore = create<RobotState>((set, get) => {
         return false;
       }
     },
+
+    dismissError: () => set({ lastError: null }),
 
     fetchLogs: async (filters) => {
       try {

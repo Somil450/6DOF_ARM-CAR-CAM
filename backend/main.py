@@ -117,7 +117,10 @@ async def get_gateway_health():
 # ============================================================
 @app.post("/api/car/command")
 async def send_car_command(req: CarCommandRequest):
-    if mission_service.emergency_stop and req.command.upper() != "STOP":
+    cmd_upper = req.command.strip().upper()
+    if cmd_upper == "RESET":
+        mission_service.clear_emergency_stop()
+    elif mission_service.emergency_stop and not req.force and cmd_upper != "STOP":
         raise HTTPException(status_code=423, detail="Emergency Stop is active. Reset latch before moving.")
     res = car_service.send_command(req.command, force=req.force)
     return res

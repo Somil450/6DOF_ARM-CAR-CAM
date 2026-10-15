@@ -35,6 +35,9 @@ WiFiUDP armCommandUdp;
 enum CarState {
   STATE_IDLE,
   STATE_FORWARD,
+  STATE_BACKWARD,
+  STATE_LEFT,
+  STATE_RIGHT,
   STATE_PICKUP_WAIT,
   STATE_REVERSE
 };
@@ -51,10 +54,13 @@ bool pythonAllowsMovement = false;
 unsigned long lastDistanceRead = 0;
 const unsigned long DISTANCE_INTERVAL_MS = 150;
 
+unsigned long lastCommandTime = 0;
+const unsigned long COMMAND_TIMEOUT_MS = 600; // Watchdog: auto-stop if no keep-alive within 600ms
+
 
 // ============================================================
 // MOTOR CONTROL
-// These directions match the forward pin pattern you confirmed.
+// These directions match the L298N forward/backward and spin turns.
 // ============================================================
 
 void stopCar() {
@@ -79,6 +85,25 @@ void moveBackward() {
   digitalWrite(IN3, LOW);
   digitalWrite(IN4, HIGH);
 }
+
+void turnLeft() {
+  // In LEFT: Left motors forward, both Right motors stop
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+}
+
+void turnRight() {
+  // In RIGHT: both Left motors stop, Right motors forward
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+}
+
 
 
 // ============================================================
@@ -282,31 +307,43 @@ void checkArmFeedback() {
 // DISTANCE AND MOVEMENT LOGIC
 // ============================================================
 
+// ============================================================
+// DISTANCE AND MOVEMENT LOGIC
+// ============================================================
+
 void updateCarLogic() {
   unsigned long now = millis();
 
-  if (now - lastDistanceRead < DISTANCE_INTERVAL_MS) {
-    return;
+  if (now - lastDistanceRead >= DISTANCE_INTERVAL_MS) {
+    lastDistanceRead = now;
+    currentDistance = readDistance();
   }
 
-  lastDistanceRead = now;
-  currentDistance = readDistance();
-
-  if (currentDistance < 0.0f) {
+  // Watchdog: If active movement was commanded but no keep-alive received for 600ms, stop safely.
+  if (
+    pythonAllowsMovement &&
+    carState != STATE_PICKUP_WAIT &&
+    carState != STATE_REVERSE &&
+    (now - lastCommandTime > COMMAND_TIMEOUT_MS)
+  ) {
+    pythonAllowsMovement = false;
     stopCar();
+    carState = STATE_IDLE;
     return;
   }
 
-  // Stop and initiate pickup at 25 cm.
+  // Forward obstacle detection (only stop/pickup if valid obstacle closer than STOP_DISTANCE_CM)
   if (carState == STATE_FORWARD) {
-    if (currentDistance <= STOP_DISTANCE_CM) {
+    if (currentDistance > 0.0f && currentDistance <= STOP_DISTANCE_CM) {
       startPickup();
-    } else if (pythonAllowsMovement) {
+      return;
+    }
+
+    if (pythonAllowsMovement) {
       moveForward();
     } else {
       stopCar();
     }
-
     return;
   }
 
@@ -314,6 +351,7 @@ void updateCarLogic() {
   if (carState == STATE_REVERSE) {
     if (
       reverseTargetDistance > 0.0f &&
+      currentDistance > 0.0f &&
       currentDistance >= reverseTargetDistance
     ) {
       stopCar();
@@ -330,12 +368,43 @@ void updateCarLogic() {
     } else {
       moveBackward();
     }
-
     return;
   }
 
-  // Never drive during pickup or while idle.
-  stopCar();
+  // Manual backward movement
+  if (carState == STATE_BACKWARD) {
+    if (pythonAllowsMovement) {
+      moveBackward();
+    } else {
+      stopCar();
+    }
+    return;
+  }
+
+  // Manual left spin turn
+  if (carState == STATE_LEFT) {
+    if (pythonAllowsMovement) {
+      turnLeft();
+    } else {
+      stopCar();
+    }
+    return;
+  }
+
+  // Manual right spin turn
+  if (carState == STATE_RIGHT) {
+    if (pythonAllowsMovement) {
+      turnRight();
+    } else {
+      stopCar();
+    }
+    return;
+  }
+
+  // Never drive during pickup wait or while idle.
+  if (carState == STATE_IDLE) {
+    stopCar();
+  }
 }
 
 
@@ -384,37 +453,12 @@ void handleCommand() {
   }
 
   if (cmd == "FORWARD") {
-    // Active pickup/reverse must finish before the next cycle.
-    if (
-      carState == STATE_PICKUP_WAIT ||
-      carState == STATE_REVERSE
-    ) {
-      stopCar();
-
-      server.send(
-        409,
-        "text/plain",
-        "PICKUP_OR_REVERSE_STILL_ACTIVE"
-      );
-
-      Serial.println("PICKUP_OR_REVERSE_STILL_ACTIVE");
-      return;
-    }
-
-    // Read a fresh measurement before moving.
+    // Read distance
     float d = readDistance();
     currentDistance = d;
 
-    if (d < 0.0f) {
-      stopCar();
-      pythonAllowsMovement = false;
-
-      server.send(503, "text/plain", "INVALID_DISTANCE");
-      Serial.println("INVALID_DISTANCE");
-      return;
-    }
-
-    if (d <= STOP_DISTANCE_CM) {
+    // Only block if a valid obstacle is confirmed closer than STOP_DISTANCE_CM
+    if (d > 0.0f && d <= STOP_DISTANCE_CM) {
       stopCar();
       pythonAllowsMovement = false;
 
@@ -437,6 +481,7 @@ void handleCommand() {
 
     carState = STATE_FORWARD;
     pythonAllowsMovement = true;
+    lastCommandTime = millis();
 
     moveForward();
 
@@ -446,21 +491,38 @@ void handleCommand() {
   }
 
   if (cmd == "BACKWARD") {
-    if (
-      carState == STATE_PICKUP_WAIT ||
-      carState == STATE_REVERSE
-    ) {
-      server.send(409, "text/plain", "SEQUENCE_ACTIVE");
-      Serial.println("SEQUENCE_ACTIVE");
-      return;
-    }
+    carState = STATE_BACKWARD;
+    pythonAllowsMovement = true;
+    lastCommandTime = millis();
 
-    pythonAllowsMovement = false;
-    carState = STATE_IDLE;
     moveBackward();
 
-    server.send(200, "text/plain", "BACKWARD");
-    Serial.println("BACKWARD");
+    server.send(200, "text/plain", "BACKWARD_ACCEPTED");
+    Serial.println("BACKWARD_ACCEPTED");
+    return;
+  }
+
+  if (cmd == "LEFT") {
+    carState = STATE_LEFT;
+    pythonAllowsMovement = true;
+    lastCommandTime = millis();
+
+    turnLeft();
+
+    server.send(200, "text/plain", "LEFT_ACCEPTED");
+    Serial.println("LEFT_ACCEPTED");
+    return;
+  }
+
+  if (cmd == "RIGHT") {
+    carState = STATE_RIGHT;
+    pythonAllowsMovement = true;
+    lastCommandTime = millis();
+
+    turnRight();
+
+    server.send(200, "text/plain", "RIGHT_ACCEPTED");
+    Serial.println("RIGHT_ACCEPTED");
     return;
   }
 
@@ -482,7 +544,19 @@ void handleStatus() {
       break;
 
     case STATE_FORWARD:
-      status = "MOVING_ALLOWED";
+      status = "MOVING_FORWARD";
+      break;
+
+    case STATE_BACKWARD:
+      status = "MOVING_BACKWARD";
+      break;
+
+    case STATE_LEFT:
+      status = "TURNING_LEFT";
+      break;
+
+    case STATE_RIGHT:
+      status = "TURNING_RIGHT";
       break;
 
     case STATE_PICKUP_WAIT:

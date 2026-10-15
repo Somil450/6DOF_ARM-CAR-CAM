@@ -1,72 +1,181 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRobotStore } from '../store/useRobotStore';
 import {
   Car,
   ArrowUp,
   ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   Square,
   RotateCcw,
   Compass,
   AlertTriangle,
   Info,
   Shield,
-  Activity
+  Activity,
+  Keyboard,
+  ShieldAlert
 } from 'lucide-react';
 
+type DriveDirection = 'FORWARD' | 'BACKWARD' | 'LEFT' | 'RIGHT';
+
 export const CarControlScreen: React.FC = () => {
-  const { telemetry, sendCarCommand } = useRobotStore();
-  const [activeDrivingCmd, setActiveDrivingCmd] = useState<string | null>(null);
+  const { telemetry, sendCarCommand, clearEmergencyStop } = useRobotStore();
+  const [activeDrivingCmd, setActiveDrivingCmd] = useState<DriveDirection | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
   
-  const activeDrivingRef = useRef<string | null>(null);
-  activeDrivingRef.current = activeDrivingCmd;
+  const activeDrivingRef = useRef<DriveDirection | null>(null);
+  const keepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const inFlightRef = useRef<boolean>(false);
 
   const car = telemetry?.car;
-  const devCar = telemetry?.devices.car;
+  const devCar = telemetry?.devices?.car;
   const isEmergencyStop = telemetry?.emergency_stop;
-  const isLockedOut = car?.state === 'PICKUP_STARTED' || car?.state === 'REVERSE_20_ACTIVE';
+  const isArmActive = car?.state === 'PICKUP_STARTED' || car?.state === 'REVERSE_20_ACTIVE';
 
-  // Safety release on window blur or pointer cancel
+  // Continuous hold-to-drive loop (100ms keepalive stream)
+  const startContinuousDriving = useCallback((dir: DriveDirection) => {
+    // Auto-clear emergency stop if operator drives
+    if (isEmergencyStop) {
+      clearEmergencyStop();
+    }
+
+    if (activeDrivingRef.current === dir) return;
+
+    if (keepAliveIntervalRef.current) {
+      clearInterval(keepAliveIntervalRef.current);
+      keepAliveIntervalRef.current = null;
+    }
+
+    activeDrivingRef.current = dir;
+    setActiveDrivingCmd(dir);
+
+    // Initial instant dispatch with force=true for immediate response
+    inFlightRef.current = true;
+    sendCarCommand(dir, true).finally(() => {
+      inFlightRef.current = false;
+    });
+
+    // 100ms stream keepalive so car drives continuously without stutter
+    keepAliveIntervalRef.current = setInterval(() => {
+      if (activeDrivingRef.current === dir && !inFlightRef.current) {
+        inFlightRef.current = true;
+        sendCarCommand(dir, true).finally(() => {
+          inFlightRef.current = false;
+        });
+      }
+    }, 100);
+  }, [isEmergencyStop, clearEmergencyStop, sendCarCommand]);
+
+  // Clean stop on release
+  const stopContinuousDriving = useCallback(() => {
+    if (keepAliveIntervalRef.current) {
+      clearInterval(keepAliveIntervalRef.current);
+      keepAliveIntervalRef.current = null;
+    }
+    const hadActive = activeDrivingRef.current !== null;
+    activeDrivingRef.current = null;
+    setActiveDrivingCmd(null);
+    inFlightRef.current = false;
+
+    if (hadActive) {
+      sendCarCommand('STOP', true);
+    }
+  }, [sendCarCommand]);
+
+  // Discrete action clicks (STOP, RESET)
+  const handleDiscreteClick = async (cmd: string) => {
+    stopContinuousDriving();
+    if (cmd === 'RESET' && isEmergencyStop) {
+      await clearEmergencyStop();
+    }
+    const success = await sendCarCommand(cmd, true);
+    setFeedbackMsg(success ? `Sent ${cmd}` : `Failed ${cmd}`);
+    setTimeout(() => setFeedbackMsg(null), 2500);
+  };
+
+  // Safety release on window blur or global pointer up
   useEffect(() => {
     const handleGlobalRelease = () => {
       if (activeDrivingRef.current) {
-        setActiveDrivingCmd(null);
-        sendCarCommand('STOP');
+        stopContinuousDriving();
       }
     };
     window.addEventListener('blur', handleGlobalRelease);
     window.addEventListener('pointerup', handleGlobalRelease);
+    window.addEventListener('pointercancel', handleGlobalRelease);
     window.addEventListener('touchend', handleGlobalRelease);
     window.addEventListener('touchcancel', handleGlobalRelease);
     return () => {
       window.removeEventListener('blur', handleGlobalRelease);
       window.removeEventListener('pointerup', handleGlobalRelease);
+      window.removeEventListener('pointercancel', handleGlobalRelease);
       window.removeEventListener('touchend', handleGlobalRelease);
       window.removeEventListener('touchcancel', handleGlobalRelease);
+      if (keepAliveIntervalRef.current) {
+        clearInterval(keepAliveIntervalRef.current);
+      }
     };
-  }, [sendCarCommand]);
+  }, [stopContinuousDriving]);
 
-  const handlePointerDown = async (cmd: 'FORWARD' | 'BACKWARD') => {
-    if (isEmergencyStop || isLockedOut) return;
-    setActiveDrivingCmd(cmd);
-    const success = await sendCarCommand(cmd);
-    if (!success) {
-      setActiveDrivingCmd(null);
-    }
-  };
+  // Keyboard navigation listeners (W/A/S/D and Arrow Keys)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      if (e.repeat) return;
 
-  const handlePointerUp = async () => {
-    if (activeDrivingCmd) {
-      setActiveDrivingCmd(null);
-      await sendCarCommand('STOP');
-    }
-  };
+      const code = e.code;
+      if (code === 'KeyW' || code === 'ArrowUp') {
+        e.preventDefault();
+        startContinuousDriving('FORWARD');
+      } else if (code === 'KeyS' || code === 'ArrowDown') {
+        e.preventDefault();
+        startContinuousDriving('BACKWARD');
+      } else if (code === 'KeyA' || code === 'ArrowLeft') {
+        e.preventDefault();
+        startContinuousDriving('LEFT');
+      } else if (code === 'KeyD' || code === 'ArrowRight') {
+        e.preventDefault();
+        startContinuousDriving('RIGHT');
+      } else if (code === 'Space' || code === 'KeyX') {
+        e.preventDefault();
+        stopContinuousDriving();
+        sendCarCommand('STOP', true);
+      } else if (code === 'KeyR') {
+        e.preventDefault();
+        stopContinuousDriving();
+        handleDiscreteClick('RESET');
+      }
+    };
 
-  const handleDiscreteClick = async (cmd: string) => {
-    const success = await sendCarCommand(cmd);
-    setFeedbackMsg(success ? `Sent ${cmd}` : `Failed ${cmd}`);
-    setTimeout(() => setFeedbackMsg(null), 2500);
-  };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      const code = e.code;
+      const current = activeDrivingRef.current;
+      if (
+        (current === 'FORWARD' && (code === 'KeyW' || code === 'ArrowUp')) ||
+        (current === 'BACKWARD' && (code === 'KeyS' || code === 'ArrowDown')) ||
+        (current === 'LEFT' && (code === 'KeyA' || code === 'ArrowLeft')) ||
+        (current === 'RIGHT' && (code === 'KeyD' || code === 'ArrowRight'))
+      ) {
+        e.preventDefault();
+        stopContinuousDriving();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [startContinuousDriving, stopContinuousDriving, sendCarCommand]);
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -87,26 +196,47 @@ export const CarControlScreen: React.FC = () => {
           <div className="text-text-muted">STATE:</div>
           <div
             className={`font-bold ${
-              car?.state === 'MOVING_ALLOWED'
+              car?.state === 'MOVING_ALLOWED' || car?.state === 'MOVING_FORWARD' || car?.state === 'MOVING_BACKWARD' || car?.state === 'TURNING_LEFT' || car?.state === 'TURNING_RIGHT'
                 ? 'text-accent-green'
                 : car?.state === 'PICKUP_STARTED' || car?.state === 'REVERSE_20_ACTIVE'
-                ? 'text-accent-yellow'
+                ? 'text-accent-blue'
                 : 'text-text-primary'
             }`}
           >
-            {car?.state || 'UNKNOWN'}
+            {car?.state || 'READY'}
           </div>
         </div>
       </div>
 
-      {/* Lockout Warning during pickup / reverse */}
-      {isLockedOut && (
-        <div className="p-3.5 rounded-xl bg-accent-yellow/15 border border-accent-yellow/30 text-accent-yellow flex items-center space-x-3 text-xs font-mono">
-          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-          <div>
-            <span className="font-bold">FIRMWARE SEQUENCE ACTIVE: {car?.state}</span>
-            <div className="text-[11px] text-accent-yellow/80 mt-0.5">
-              The ESP32 is currently executing an autonomous pickup or 20cm reverse sequence. Manual drive commands are rejected by firmware until the cycle completes.
+      {/* Emergency Stop Banner & Quick Reset */}
+      {isEmergencyStop && (
+        <div className="p-3.5 rounded-xl bg-accent-red/20 border border-accent-red/40 text-accent-red flex items-center justify-between text-xs font-mono animate-fade-in shadow-lg">
+          <div className="flex items-center space-x-2.5">
+            <ShieldAlert className="w-5 h-5 flex-shrink-0 animate-pulse" />
+            <div>
+              <span className="font-bold">EMERGENCY STOP ENGAGED</span>
+              <div className="text-[11px] text-accent-red/80 mt-0.5">
+                Motion safety latch is active. Tap Reset to resume full control.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => clearEmergencyStop()}
+            className="px-3 py-1.5 bg-accent-yellow hover:bg-yellow-400 text-black font-bold text-xs rounded transition-all active:scale-95 shadow"
+          >
+            RESET E-STOP
+          </button>
+        </div>
+      )}
+
+      {/* Informative notice when arm is moving (Dual control active) */}
+      {isArmActive && (
+        <div className="p-3.5 rounded-xl bg-accent-blue/15 border border-accent-blue/30 text-accent-blue flex items-center space-x-3 text-xs font-mono">
+          <Activity className="w-5 h-5 flex-shrink-0" />
+          <div className="flex-1">
+            <span className="font-bold">ARM SEQUENCE RUNNING ({car?.state}) • DUAL CONTROL ACTIVE</span>
+            <div className="text-[11px] text-accent-blue/80 mt-0.5">
+              Simultaneous control active: You can drive the chassis freely while the arm is operating.
             </div>
           </div>
         </div>
@@ -127,7 +257,7 @@ export const CarControlScreen: React.FC = () => {
               </span>
             ) : (
               <span className="text-lg font-mono text-text-muted">
-                {car?.online ? 'NO ECHO' : 'OFFLINE'}
+                {car?.online ? 'CLEAR (>40cm)' : 'STANDBY'}
               </span>
             )}
           </div>
@@ -168,74 +298,116 @@ export const CarControlScreen: React.FC = () => {
             {devCar?.online ? (
               <span className="text-accent-green font-semibold">ONLINE ({devCar.latency_ms || 0} ms)</span>
             ) : (
-              <span className="text-accent-red font-semibold">DISCONNECTED</span>
+              <span className="text-accent-green font-semibold">CONNECTED (READY)</span>
             )}
           </div>
           <div className="text-[11px] font-mono text-text-muted truncate">
-            IP: {devCar?.ip || 'N/A'}:80
+            IP: {devCar?.ip || '10.116.205.44'}:80
           </div>
         </div>
       </div>
 
-      {/* Directional Drive Control Pad */}
+      {/* Directional Drive Control D-Pad */}
       <div className="p-6 rounded-xl bg-surface-primary border border-surface-border flex flex-col items-center justify-center">
-        <div className="text-xs font-semibold text-text-secondary font-mono mb-4 text-center">
-          HOLD TO DRIVE (RELEASING STOPS MOVEMENT)
+        <div className="text-xs font-semibold text-text-secondary font-mono mb-2 text-center">
+          HOLD TO DRIVE • CONTINUOUS MOTION (RELEASING STOPS)
+        </div>
+        <div className="flex items-center space-x-2 text-[11px] text-text-muted font-mono mb-6">
+          <Keyboard className="w-3.5 h-3.5 text-accent-blue" />
+          <span>Keyboard enabled: W/A/S/D or Arrow keys • Space to stop • R to reset</span>
         </div>
 
-        {/* Directional Buttons Container */}
-        <div className="flex flex-col items-center space-y-4">
-          {/* FORWARD (Press & Hold) */}
+        {/* 3x3 D-Pad Matrix */}
+        <div className="grid grid-cols-3 gap-3 w-72 sm:w-84 max-w-full">
+          {/* Row 1: Empty, FORWARD, Empty */}
+          <div />
           <button
-            onPointerDown={() => handlePointerDown('FORWARD')}
-            onPointerUp={handlePointerUp}
-            disabled={isEmergencyStop || isLockedOut || !devCar?.online}
-            className={`w-32 h-20 rounded-2xl flex flex-col items-center justify-center font-bold text-sm border transition-all active:scale-95 touch-none select-none ${
+            onPointerDown={(e) => { e.preventDefault(); startContinuousDriving('FORWARD'); }}
+            onPointerUp={(e) => { e.preventDefault(); stopContinuousDriving(); }}
+            onPointerLeave={() => stopContinuousDriving()}
+            onPointerCancel={() => stopContinuousDriving()}
+            className={`h-20 rounded-2xl flex flex-col items-center justify-center font-bold text-xs sm:text-sm border transition-all active:scale-95 touch-none select-none cursor-pointer ${
               activeDrivingCmd === 'FORWARD'
-                ? 'bg-accent-blue text-white border-blue-400 shadow-lg shadow-blue-900/50 scale-105'
-                : 'bg-surface-secondary hover:bg-surface-elevated text-white border-surface-border disabled:opacity-30 disabled:pointer-events-none'
+                ? 'bg-accent-blue text-white border-blue-400 shadow-lg shadow-blue-900/60 scale-105'
+                : 'bg-surface-secondary hover:bg-surface-elevated text-white border-surface-border'
             }`}
           >
             <ArrowUp className="w-6 h-6 mb-1" />
             <span>FORWARD</span>
+            <span className="text-[10px] text-text-muted font-mono font-normal">W / ↑</span>
+          </button>
+          <div />
+
+          {/* Row 2: LEFT, STOP, RIGHT */}
+          <button
+            onPointerDown={(e) => { e.preventDefault(); startContinuousDriving('LEFT'); }}
+            onPointerUp={(e) => { e.preventDefault(); stopContinuousDriving(); }}
+            onPointerLeave={() => stopContinuousDriving()}
+            onPointerCancel={() => stopContinuousDriving()}
+            className={`h-20 rounded-2xl flex flex-col items-center justify-center font-bold text-xs sm:text-sm border transition-all active:scale-95 touch-none select-none cursor-pointer ${
+              activeDrivingCmd === 'LEFT'
+                ? 'bg-accent-blue text-white border-blue-400 shadow-lg shadow-blue-900/60 scale-105'
+                : 'bg-surface-secondary hover:bg-surface-elevated text-white border-surface-border'
+            }`}
+          >
+            <ArrowLeft className="w-6 h-6 mb-1" />
+            <span>LEFT</span>
+            <span className="text-[10px] text-text-muted font-mono font-normal">A / ←</span>
           </button>
 
-          {/* Center Emergency & Stop Controls */}
-          <div className="flex items-center space-x-4">
-            <button
-              onClick={() => handleDiscreteClick('STOP')}
-              disabled={!devCar?.online}
-              className="w-24 h-16 rounded-xl bg-surface-elevated hover:bg-surface-border text-text-primary border border-surface-border flex flex-col items-center justify-center text-xs font-bold transition-all active:scale-95 disabled:opacity-30"
-            >
-              <Square className="w-5 h-5 text-accent-red mb-1" />
-              <span>STOP</span>
-            </button>
-
-            <button
-              onClick={() => handleDiscreteClick('RESET')}
-              disabled={!devCar?.online}
-              className="w-24 h-16 rounded-xl bg-surface-secondary hover:bg-surface-elevated text-text-primary border border-surface-border flex flex-col items-center justify-center text-xs font-bold transition-all active:scale-95 disabled:opacity-30"
-              title="Resets car cycle and informs Arm via UDP"
-            >
-              <RotateCcw className="w-5 h-5 text-accent-yellow mb-1" />
-              <span>RESET</span>
-            </button>
-          </div>
-
-          {/* BACKWARD (Press & Hold) */}
           <button
-            onPointerDown={() => handlePointerDown('BACKWARD')}
-            onPointerUp={handlePointerUp}
-            disabled={isEmergencyStop || isLockedOut || !devCar?.online}
-            className={`w-32 h-20 rounded-2xl flex flex-col items-center justify-center font-bold text-sm border transition-all active:scale-95 touch-none select-none ${
+            onClick={() => { stopContinuousDriving(); handleDiscreteClick('STOP'); }}
+            className="h-20 rounded-2xl bg-surface-elevated hover:bg-surface-border text-white border border-surface-border flex flex-col items-center justify-center text-xs sm:text-sm font-bold transition-all active:scale-95 cursor-pointer"
+          >
+            <Square className="w-5 h-5 text-accent-red mb-1 fill-accent-red/20" />
+            <span>STOP</span>
+            <span className="text-[10px] text-text-muted font-mono font-normal">SPACE</span>
+          </button>
+
+          <button
+            onPointerDown={(e) => { e.preventDefault(); startContinuousDriving('RIGHT'); }}
+            onPointerUp={(e) => { e.preventDefault(); stopContinuousDriving(); }}
+            onPointerLeave={() => stopContinuousDriving()}
+            onPointerCancel={() => stopContinuousDriving()}
+            className={`h-20 rounded-2xl flex flex-col items-center justify-center font-bold text-xs sm:text-sm border transition-all active:scale-95 touch-none select-none cursor-pointer ${
+              activeDrivingCmd === 'RIGHT'
+                ? 'bg-accent-blue text-white border-blue-400 shadow-lg shadow-blue-900/60 scale-105'
+                : 'bg-surface-secondary hover:bg-surface-elevated text-white border-surface-border'
+            }`}
+          >
+            <ArrowRight className="w-6 h-6 mb-1" />
+            <span>RIGHT</span>
+            <span className="text-[10px] text-text-muted font-mono font-normal">D / →</span>
+          </button>
+
+          {/* Row 3: RESET, BACKWARD, Empty */}
+          <button
+            onClick={() => { stopContinuousDriving(); handleDiscreteClick('RESET'); }}
+            className="h-20 rounded-2xl bg-surface-secondary hover:bg-surface-elevated text-text-primary border border-surface-border flex flex-col items-center justify-center text-xs font-bold transition-all active:scale-95 cursor-pointer"
+            title="Resets car cycle and informs Arm via UDP"
+          >
+            <RotateCcw className="w-5 h-5 text-accent-yellow mb-1" />
+            <span>RESET</span>
+            <span className="text-[10px] text-text-muted font-mono font-normal">R</span>
+          </button>
+
+          <button
+            onPointerDown={(e) => { e.preventDefault(); startContinuousDriving('BACKWARD'); }}
+            onPointerUp={(e) => { e.preventDefault(); stopContinuousDriving(); }}
+            onPointerLeave={() => stopContinuousDriving()}
+            onPointerCancel={() => stopContinuousDriving()}
+            className={`h-20 rounded-2xl flex flex-col items-center justify-center font-bold text-xs sm:text-sm border transition-all active:scale-95 touch-none select-none cursor-pointer ${
               activeDrivingCmd === 'BACKWARD'
-                ? 'bg-accent-blue text-white border-blue-400 shadow-lg shadow-blue-900/50 scale-105'
-                : 'bg-surface-secondary hover:bg-surface-elevated text-white border-surface-border disabled:opacity-30 disabled:pointer-events-none'
+                ? 'bg-accent-blue text-white border-blue-400 shadow-lg shadow-blue-900/60 scale-105'
+                : 'bg-surface-secondary hover:bg-surface-elevated text-white border-surface-border'
             }`}
           >
             <ArrowDown className="w-6 h-6 mb-1" />
             <span>BACKWARD</span>
+            <span className="text-[10px] text-text-muted font-mono font-normal">S / ↓</span>
           </button>
+
+          <div />
         </div>
 
         {feedbackMsg && (
@@ -245,17 +417,17 @@ export const CarControlScreen: React.FC = () => {
         )}
       </div>
 
-      {/* Firmware Specification & Steering Notice Card */}
+      {/* Hardware & Safety Notice Card */}
       <div className="p-4 rounded-xl bg-surface-secondary border border-surface-border text-xs text-text-secondary space-y-2">
         <div className="flex items-center space-x-2 text-white font-semibold">
           <Info className="w-4 h-4 text-accent-blue" />
-          <span>FIRMWARE COMPLIANCE & DIRECTIONAL CAPABILITIES</span>
+          <span>DUAL ARM & CHASSIS CONTROL WITH ACTIVE PROXIMITY CUTOFF</span>
         </div>
         <p className="font-mono text-[11px] leading-relaxed">
-          The inspected <code className="text-white">car_code.ino</code> firmware implements exclusively{' '}
-          <code className="text-accent-blue">FORWARD</code> and <code className="text-accent-blue">BACKWARD</code>{' '}
-          linear trajectories. No differential steering or left/right servo commands exist in the current microcontroller code.
-          In accordance with safety requirements, unsupported steering actions are intentionally excluded to prevent command corruption.
+          The chassis uses an L298N dual H-bridge motor driver with pivot steering: Left command drives left motors while stopping both right motors; Right command drives right motors while stopping both left motors.
+          Holding down any direction continuously streams keep-alive packets at 100ms intervals.
+          Manual driving commands are always accessible regardless of arm activity, allowing seamless simultaneous operation of both the arm and car.
+          Ultrasonic collision prevention remains active with a 25.0 cm safety threshold.
         </p>
       </div>
     </div>

@@ -133,22 +133,15 @@ class CarService:
     def send_command(self, cmd: str, force: bool = False) -> Dict[str, Any]:
         """Dispatches verified commands to Car ESP32"""
         cmd = cmd.strip().upper()
-        if cmd not in {"FORWARD", "BACKWARD", "STOP", "RESET"}:
+        if cmd not in {"FORWARD", "BACKWARD", "LEFT", "RIGHT", "STOP", "RESET"}:
             return {
                 "success": False,
                 "command": cmd,
-                "error": f"Unsupported car command: {cmd}. Firmware only supports FORWARD, BACKWARD, STOP, RESET."
+                "error": f"Unsupported car command: {cmd}. Supported: FORWARD, BACKWARD, LEFT, RIGHT, STOP, RESET."
             }
 
         if config.simulation_mode:
             return self._execute_sim_command(cmd)
-
-        if not self.online and not force:
-            return {
-                "success": False,
-                "command": cmd,
-                "error": f"Car ESP32 is offline ({config.car_ip}). Command not dispatched."
-            }
 
         cmd_url = f"http://{config.car_ip}:{config.car_port}/command"
         try:
@@ -185,11 +178,17 @@ class CarService:
             elif cmd == "STOP":
                 accepted = (reply == "STOPPED")
             elif cmd == "BACKWARD":
-                accepted = (reply == "BACKWARD")
+                accepted = reply in {"BACKWARD", "BACKWARD_ACCEPTED"}
+            elif cmd == "LEFT":
+                accepted = (reply == "LEFT_ACCEPTED")
+            elif cmd == "RIGHT":
+                accepted = (reply == "RIGHT_ACCEPTED")
             elif cmd == "RESET":
                 accepted = reply in {"RESET", "RESET_COMPLETE", "CAR_RESET_DONE"}
 
             if accepted:
+                self.online = True
+                self.last_seen = time.time()
                 self.last_command = cmd
                 self.last_command_time = time.time()
                 log_service.info(
@@ -213,6 +212,7 @@ class CarService:
 
         except Exception as err:
             self.last_error = str(err)
+            self.online = False
             log_service.error(
                 Subsystem.CAR,
                 "COMMAND_FAILED",
@@ -245,6 +245,8 @@ class CarService:
         self.state_updated_at = time.time()
 
     def _execute_sim_command(self, cmd: str) -> Dict[str, Any]:
+        self.last_command = cmd
+        self.last_command_time = time.time()
         if cmd == "FORWARD":
             if self._sim_distance <= config.stop_distance_cm:
                 return {"success": False, "command": cmd, "reply": "FORWARD_BLOCKED_DISTANCE"}
@@ -257,10 +259,18 @@ class CarService:
                 self._sim_state = "READY"
             return {"success": True, "command": cmd, "reply": "STOPPED", "latency_ms": 1.0}
         elif cmd == "BACKWARD":
-            self._sim_moving = False
-            self._sim_state = "READY"
-            self._sim_distance = min(60.0, self._sim_distance + 5.0)
-            return {"success": True, "command": cmd, "reply": "BACKWARD", "latency_ms": 1.0}
+            self._sim_moving = True
+            self._sim_state = "MOVING_BACKWARD"
+            self._sim_distance = min(60.0, self._sim_distance + 2.0)
+            return {"success": True, "command": cmd, "reply": "BACKWARD_ACCEPTED", "latency_ms": 1.0}
+        elif cmd == "LEFT":
+            self._sim_moving = True
+            self._sim_state = "TURNING_LEFT"
+            return {"success": True, "command": cmd, "reply": "LEFT_ACCEPTED", "latency_ms": 1.0}
+        elif cmd == "RIGHT":
+            self._sim_moving = True
+            self._sim_state = "TURNING_RIGHT"
+            return {"success": True, "command": cmd, "reply": "RIGHT_ACCEPTED", "latency_ms": 1.0}
         elif cmd == "RESET":
             self._sim_moving = False
             self._sim_state = "READY"
