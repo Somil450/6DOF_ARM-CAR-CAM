@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
                 arm_service.check_health()
             except Exception as e:
                 log_service.error(Subsystem.GATEWAY, "POLL_ERROR", f"Error in hardware poll loop: {e}")
-            await asyncio.sleep(0.25) # 4 Hz health polling
+            await asyncio.sleep(0.8) # 1.2 Hz health polling to prevent ESP32 WebServer connection starvation
 
     poll_task = asyncio.create_task(hardware_poll_loop())
     broadcast_task = asyncio.create_task(telemetry_service.broadcast_loop())
@@ -84,21 +84,42 @@ app.add_middleware(
 )
 
 # ============================================================
-# WEBSOCKET TELEMETRY
+# WEBSOCKET & REST TELEMETRY
 # ============================================================
 @app.websocket("/ws/telemetry")
 async def websocket_telemetry(websocket: WebSocket):
     await telemetry_service.connect(websocket)
     try:
+        import json
         while True:
-            # Client can send heartbeat or commands over WS
-            data = await websocket.receive_text()
-            if data == "ping":
+            text = await websocket.receive_text()
+            if text == "ping":
                 await websocket.send_text("pong")
+                continue
+            try:
+                msg = json.loads(text)
+                msg_type = msg.get("type")
+                if msg_type == "arm_angles":
+                    angles = msg.get("angles")
+                    if isinstance(angles, list) and len(angles) == 6:
+                        arm_service.set_angles(angles)
+                elif msg_type == "gripper":
+                    arm_service.control_gripper(msg.get("action", "OPEN"), msg.get("angle"))
+                elif msg_type == "car_cmd":
+                    cmd = msg.get("command")
+                    if cmd:
+                        car_service.send_command(cmd)
+            except Exception:
+                pass
     except WebSocketDisconnect:
         telemetry_service.disconnect(websocket)
     except Exception:
         telemetry_service.disconnect(websocket)
+
+@app.get("/api/telemetry")
+async def get_telemetry():
+    """Returns current complete system telemetry snapshot over REST"""
+    return telemetry_service.compile_payload()
 
 # ============================================================
 # HEALTH & STATE

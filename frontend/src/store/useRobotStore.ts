@@ -49,6 +49,8 @@ export interface TelemetryData {
     commanded_angles: number[];
     measured_angles: number[] | null;
     homing_active: boolean;
+    joint_min_angles?: number[];
+    joint_max_angles?: number[];
     gripper_channel: number;
     gripper_state: string;
     gripper_angle: number;
@@ -127,6 +129,7 @@ interface RobotState {
   initWebSocket: () => void;
   sendCarCommand: (command: string, force?: boolean) => Promise<boolean>;
   setArmAngles: (angles: number[]) => Promise<boolean>;
+  streamArmAngles: (angles: number[]) => void;
   sendArmCommand: (command: string) => Promise<boolean>;
   controlGripper: (action: string, angle?: number) => Promise<boolean>;
   applyArmPreset: (preset: string) => Promise<boolean>;
@@ -269,6 +272,22 @@ export const useRobotStore = create<RobotState>((set, get) => {
         set({ lastError: err.message });
         return false;
       }
+    },
+
+    streamArmAngles: (angles) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: 'arm_angles', angles }));
+          return;
+        } catch (e) {
+          // fallback to fetch
+        }
+      }
+      fetch(`${getBaseUrl()}/api/arm/angles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ angles }),
+      }).catch(() => {});
     },
 
     sendArmCommand: async (command) => {

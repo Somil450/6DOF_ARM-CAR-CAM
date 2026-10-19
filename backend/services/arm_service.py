@@ -30,12 +30,12 @@ class ArmService:
         self.last_seen: Optional[float] = None
         self.last_error: Optional[str] = None
         
-        # Verified Presets
+        # Verified Presets (CH3 in 0°-360° UI coordinates)
         self.presets = {
             "HOME": list(config.home_angles),
-            "READY": [146, 150, 70, 110, 119, config.gripper_open_angle],
-            "PICKUP": [146, 120, 100, 90, 119, config.gripper_open_angle],
-            "DROP_OFF": [80, 140, 80, 100, 119, config.gripper_open_angle],
+            "READY": [146, 150, 70, 220, 119, config.gripper_open_angle],
+            "PICKUP": [146, 120, 100, 180, 119, config.gripper_open_angle],
+            "DROP_OFF": [80, 140, 80, 200, 119, config.gripper_open_angle],
         }
 
     def get_status(self) -> DeviceStatus:
@@ -65,6 +65,8 @@ class ArmService:
             "commanded_angles": list(self.commanded_angles),
             "measured_angles": None, # Physical servos do not provide feedback
             "homing_active": self.homing_active,
+            "joint_min_angles": list(config.joint_min_angles),
+            "joint_max_angles": list(config.joint_max_angles),
             "gripper_channel": config.gripper_channel,
             "gripper_state": self.gripper_state,
             "gripper_angle": self.commanded_angles[config.gripper_channel],
@@ -113,9 +115,13 @@ class ArmService:
         if len(angles) != 6:
             return {"success": False, "error": "Exactly 6 joint angles required"}
         
+        limits = config.joint_max_angles
+        mins = config.joint_min_angles
         for i, a in enumerate(angles):
-            if not (0 <= a <= 180):
-                return {"success": False, "error": f"Servo {i} angle {a} out of bounds (0-180)"}
+            max_val = limits[i] if i < len(limits) else 180
+            min_val = mins[i] if i < len(mins) else 0
+            if not (min_val <= a <= max_val):
+                return {"success": False, "error": f"Servo {i} angle {a} out of bounds ({min_val}-{max_val})"}
 
         self.commanded_angles = list(angles)
         if angles[config.gripper_channel] >= config.gripper_open_angle - 15:
@@ -130,7 +136,13 @@ class ArmService:
             return {"success": True, "angles": self.commanded_angles, "mode": "SIMULATION"}
 
         try:
-            packet = bytes(angles)
+            # Wire protocol: ESP32 expects 6 uint8_t bytes (0-180 for standard servos).
+            # Joint 3 (Wrist Pitch) UI range is 0-360°, mapped to 0-180 wire byte.
+            wire_angles = list(angles)
+            wire_angles[3] = int(round(angles[3] * 180.0 / 360.0))
+            wire_angles[3] = max(0, min(180, wire_angles[3]))
+            
+            packet = bytes(wire_angles)
             self.slider_socket.sendto(packet, (config.arm_ip, config.arm_slider_port))
             self.last_sent_angles = list(angles)
             self.last_sent_time = time.time()

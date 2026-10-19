@@ -4,7 +4,7 @@ WAREBOT - Telemetry Aggregator & WebSocket Broadcaster
 import time
 import asyncio
 import json
-from typing import Set, Dict, Any
+from typing import Set, Dict, Any, Optional
 from fastapi import WebSocket
 from backend.config import config
 from backend.schemas import DeviceStatus

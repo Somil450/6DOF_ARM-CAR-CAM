@@ -130,6 +130,27 @@ class CarService:
             except Exception:
                 pass
 
+    def poll_distance_sync(self) -> Optional[float]:
+        """Low-latency direct distance query for real-time tracking decisions"""
+        if config.simulation_mode:
+            return self.current_distance
+        try:
+            dist_url = f"http://{config.car_ip}:{config.car_port}/distance"
+            res = self.session.get(dist_url, timeout=(0.35, 0.35))
+            if res.status_code == 200:
+                val_str = res.text.strip()
+                if val_str.upper() != "INVALID_DISTANCE":
+                    d_val = float(val_str)
+                    if 2.0 <= d_val <= 400.0:
+                        self.current_distance = d_val
+                        self.distance_updated_at = time.time()
+                        return d_val
+            elif res.status_code == 503:
+                self.current_distance = None
+        except Exception:
+            pass
+        return self.current_distance
+
     def send_command(self, cmd: str, force: bool = False) -> Dict[str, Any]:
         """Dispatches verified commands to Car ESP32"""
         cmd = cmd.strip().upper()
@@ -171,6 +192,17 @@ class CarService:
                 return {"success": False, "command": cmd, "reply": reply, "error": "Invalid ultrasonic distance reading"}
 
             response.raise_for_status()
+
+            # Handle distance proximity block from firmware (<= 25cm)
+            if "BLOCKED" in reply:
+                self.current_distance = config.stop_distance_cm
+                self.distance_updated_at = time.time()
+                self.current_state = "READY"
+                log_service.info(
+                    Subsystem.CAR,
+                    "PROXIMITY_HALT",
+                    f"Car firmware halted forward motion at obstacle threshold: {reply} (<= {config.stop_distance_cm:.0f} cm)"
+                )
 
             accepted = False
             if cmd == "FORWARD":
@@ -232,7 +264,7 @@ class CarService:
             if self._sim_distance <= config.stop_distance_cm:
                 self._sim_state = "PICKUP_STARTED"
                 self._sim_moving = False
-                log_service.info(Subsystem.CAR, "SIM_PICKUP_TRIGGERED", "Proximity threshold (25cm) reached in simulation")
+                log_service.info(Subsystem.CAR, "SIM_PICKUP_TRIGGERED", f"Proximity threshold ({config.stop_distance_cm:.0f}cm) reached in simulation")
         elif self._sim_state == "REVERSE_20_ACTIVE":
             self._sim_distance = min(50.0, self._sim_distance + 1.5)
             if self._sim_distance >= config.stop_distance_cm + config.reverse_distance_cm:

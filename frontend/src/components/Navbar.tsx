@@ -7,7 +7,7 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar }) => {
-  const { isConnected, telemetry, triggerEmergencyStop, clearEmergencyStop } = useRobotStore();
+  const { isConnected, telemetry, triggerEmergencyStop, clearEmergencyStop, startMission, stopMission } = useRobotStore();
   const emergencyStop = telemetry?.emergency_stop || false;
   const simulationMode = telemetry?.simulation_mode || false;
   const systemMode = telemetry?.system_mode || 'MANUAL';
@@ -61,21 +61,37 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar }) => {
           )}
         </div>
 
-        {/* System operating mode */}
-        <div className="hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded border border-surface-border bg-surface-secondary text-xs font-mono">
-          <span className="text-text-muted">MODE:</span>
-          <span
-            className={
-              emergencyStop
-                ? 'text-accent-red font-bold'
-                : systemMode === 'AUTONOMOUS'
-                ? 'text-accent-blue font-semibold'
-                : 'text-text-primary'
+        {/* System operating mode toggle */}
+        <button
+          onClick={() => {
+            if (systemMode === 'AUTONOMOUS') {
+              stopMission();
+            } else {
+              startMission(telemetry?.detection?.selected_target || 'bottle');
             }
-          >
-            {systemMode}
-          </span>
-        </div>
+          }}
+          disabled={emergencyStop}
+          className={`hidden md:flex items-center space-x-1.5 px-3 py-1 rounded border text-xs font-mono transition-all active:scale-95 ${
+            emergencyStop
+              ? 'border-accent-red/40 bg-accent-red/10 text-accent-red cursor-not-allowed'
+              : systemMode === 'AUTONOMOUS'
+              ? 'border-accent-blue bg-accent-blue/20 text-accent-blue font-bold shadow animate-pulse'
+              : 'border-surface-border bg-surface-secondary text-text-secondary hover:text-white hover:border-accent-green'
+          }`}
+          title={
+            systemMode === 'AUTONOMOUS'
+              ? 'Click to stop autonomous pursuit (Switch to MANUAL)'
+              : 'Click to start autonomous pursuit (Switch to AUTONOMOUS)'
+          }
+        >
+          <span className="text-text-muted">MODE:</span>
+          <span>{systemMode}</span>
+          {systemMode === 'AUTONOMOUS' ? (
+            <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-ping" />
+          ) : (
+            <span className="text-[10px] text-accent-green ml-1 font-sans">▶ ENGAGE</span>
+          )}
+        </button>
 
         {/* Emergency Stop Button */}
         {emergencyStop ? (

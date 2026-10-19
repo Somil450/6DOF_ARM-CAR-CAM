@@ -37,21 +37,45 @@ const uint16_t SERVO_MAX_US = 2500;
 const uint16_t SERVO_FREQUENCY = 50;
 
 // ============================================================
-// HOME ANGLES
+// ============================================================
+// HOME ANGLES & JOINT LIMITS
 // ============================================================
 
 const uint8_t HOME_ANGLES[6] = {
-  146,  // Servo 0
-  180,  // Servo 1
-  46,   // Servo 2
-  124,  // Servo 3
-  119,  // Servo 4
-  157   // Servo 5
+  146,  // Servo 0: Base
+  180,  // Servo 1: Shoulder
+  46,   // Servo 2: Elbow
+  78,  // Servo 3: Wrist Pitch (Home: 124°, Max: 240°)
+  119,  // Servo 4: Wrist Roll (Home: 119° - Level)
+  157   // Servo 5: Gripper (170° Open, 90° Closed)
 };
 
+// Calibrated joint limits (0-180 wire byte format; CH3 represents 0°-360° mechanical range)
+const uint8_t MIN_ANGLES[6] = {0, 0, 0, 0, 0, 0};
+const uint8_t MAX_ANGLES[6] = {180, 180, 180, 180, 180, 180};
+
 uint8_t currentAngles[6] = {
-  146, 180, 46, 124, 119, 157
+  146, 180, 46, 78, 119, 157
 };
+
+// Target angles commanded via UDP slider or commands
+float targetAngles[6] = {
+  146.0f, 180.0f, 46.0f, 78.0f, 119.0f, 157.0f
+};
+
+// Current interpolated physical position of each servo
+float actualAngles[6] = {
+  146.0f, 180.0f, 46.0f, 78.0f, 119.0f, 157.0f
+};
+
+// Max degrees per step for smooth motion (66Hz update)
+// CH0=Base (2.5°), CH1=Shoulder (2.0°), CH2=Elbow (2.5°), CH3=Pitch (3.0°), CH4=Roll (2.5°), CH5=Gripper (3.5°)
+const float MAX_STEP_DEG[6] = {
+  2.5f, 2.0f, 2.5f, 3.0f, 2.5f, 3.5f
+};
+
+unsigned long lastSmoothUpdateTime = 0;
+const unsigned long SMOOTH_INTERVAL_MS = 15; // 66Hz smooth motion update
 
 // ============================================================
 // UDP
@@ -81,37 +105,76 @@ const unsigned long SERVO_PAUSE = 500;
 // ANGLE TO PWM CONVERSION
 // ============================================================
 
-uint16_t angleToPulse(uint8_t angle) {
-  angle = constrain(angle, 0, 180);
+uint16_t angleToPulse(uint8_t index, float angle) {
+  if (index >= SERVO_COUNT) {
+    return SERVO_MIN_US;
+  }
+
+  uint8_t minA = MIN_ANGLES[index];
+  uint8_t maxA = MAX_ANGLES[index];
+  angle = constrain(angle, (float)minA, (float)maxA);
 
   return map(
-    angle,
-    0,
-    180,
+    (long)(angle * 10),
+    (long)(minA * 10),
+    (long)(maxA * 10),
     SERVO_MIN_US,
     SERVO_MAX_US
   );
 }
 
 // ============================================================
-// MOVE SERVO
+// MOVE SERVO (IMMEDIATE OR TARGET SETTING)
 // ============================================================
 
-void setServoAngle(uint8_t index, uint8_t angle) {
+void setServoAngle(uint8_t index, uint8_t angle, bool immediate = false) {
   if (index >= SERVO_COUNT) {
     return;
   }
 
-  angle = constrain(angle, 0, 180);
+  angle = constrain(angle, MIN_ANGLES[index], MAX_ANGLES[index]);
+  targetAngles[index] = (float)angle;
 
-  uint16_t pulse = angleToPulse(angle);
+  if (immediate) {
+    actualAngles[index] = (float)angle;
+    uint16_t pulse = angleToPulse(index, actualAngles[index]);
+    pwm.writeMicroseconds(
+      SERVO_CHANNELS[index],
+      pulse
+    );
+    currentAngles[index] = angle;
+  }
+}
 
-  pwm.writeMicroseconds(
-    SERVO_CHANNELS[index],
-    pulse
-  );
+// ============================================================
+// SMOOTH MOTION UPDATE LOOP (66Hz SLEW-RATE LIMITING)
+// ============================================================
 
-  currentAngles[index] = angle;
+void updateServoPositions() {
+  unsigned long now = millis();
+  if (now - lastSmoothUpdateTime < SMOOTH_INTERVAL_MS) {
+    return;
+  }
+  lastSmoothUpdateTime = now;
+
+  for (int i = 0; i < SERVO_COUNT; i++) {
+    float diff = targetAngles[i] - actualAngles[i];
+    if (abs(diff) > 0.05f) {
+      float step = MAX_STEP_DEG[i];
+      if (abs(diff) <= step) {
+        actualAngles[i] = targetAngles[i];
+      } else {
+        actualAngles[i] += (diff > 0 ? step : -step);
+      }
+
+      uint16_t pulse = angleToPulse(i, actualAngles[i]);
+      pwm.writeMicroseconds(
+        SERVO_CHANNELS[i],
+        pulse
+      );
+      currentAngles[i] = (uint8_t)round(actualAngles[i]);
+    }
+  }
 }
 
 // ============================================================
@@ -248,7 +311,7 @@ void updateHoming() {
     homeCurrentAngle--;
   }
 
-  setServoAngle(homeServoIndex, homeCurrentAngle);
+  setServoAngle(homeServoIndex, homeCurrentAngle, true);
 }
 
 // ============================================================
@@ -285,8 +348,11 @@ void receiveSliderData() {
 
   // VALIDATE ANGLES
   for (int i = 0; i < 6; i++) {
-    if (angles[i] > 180) {
-      Serial.println("[UDP] Invalid angle");
+    if (angles[i] < MIN_ANGLES[i] || angles[i] > MAX_ANGLES[i]) {
+      Serial.print("[UDP] Invalid angle on joint ");
+      Serial.print(i);
+      Serial.print(": ");
+      Serial.println(angles[i]);
       return;
     }
   }
@@ -297,9 +363,9 @@ void receiveSliderData() {
     return;
   }
 
-  // UPDATE ALL SERVOS
+  // UPDATE ALL SERVOS WITH SMOOTH INTERPOLATION
   for (int i = 0; i < 6; i++) {
-    setServoAngle(i, angles[i]);
+    setServoAngle(i, angles[i], false);
   }
 
   // DEBUG
@@ -546,7 +612,7 @@ void setup() {
   Serial.println("[ARM] Initializing servo positions...");
 
   for (int i = 0; i < 6; i++) {
-    setServoAngle(i, HOME_ANGLES[i]);
+    setServoAngle(i, HOME_ANGLES[i], true);
     delay(250);
   }
 
@@ -572,6 +638,9 @@ void loop() {
 
   // NON-BLOCKING HOME MOVEMENT
   updateHoming();
+
+  // SMOOTH INTERPOLATED MOTION UPDATE
+  updateServoPositions();
 
   delay(2);
 }

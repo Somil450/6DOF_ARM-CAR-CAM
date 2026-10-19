@@ -20,6 +20,8 @@ class CameraService:
     def __init__(self):
         self.latest_frame: Optional[np.ndarray] = None
         self.latest_jpeg: Optional[bytes] = None
+        self.latest_annotated_jpeg: Optional[bytes] = None
+        self.annotated_time: float = 0.0
         self.frame_id: int = 0
         self.frame_time: float = 0.0
         
@@ -95,87 +97,96 @@ class CameraService:
         }
 
     def _run_stream(self):
-        """Worker loop continuously pulling MJPEG from ESP32-CAM with zero queue latency"""
-        stream_url = f"http://{config.camera_ip}:{config.camera_port}{config.camera_stream_path}"
-        
+        """Worker loop continuously pulling MJPEG from Mobile DroidCam/IP Webcam/ESP32-CAM with zero queue latency"""
         while not self.stop_event.is_set():
             if config.simulation_mode:
                 self._generate_simulation_frame()
                 self.stop_event.wait(0.04)
                 continue
 
-            try:
-                start_conn = time.perf_counter()
-                with requests.get(
-                    stream_url,
-                    stream=True,
-                    headers={"Cache-Control": "no-cache"},
-                    timeout=(3.0, 10.0)
-                ) as resp:
-                    resp.raise_for_status()
-                    conn_latency = (time.perf_counter() - start_conn) * 1000.0
-                    self.online = True
-                    self.latency_ms = round(conn_latency, 1)
-                    self.last_error = None
-                    log_service.success(Subsystem.CAMERA, "STREAM_CONNECTED", f"Connected to ESP32-CAM (HTTP {resp.status_code})")
+            # Candidate stream URLs in priority order:
+            candidate_urls = [
+                f"http://{config.camera_ip}:{config.camera_port}{config.camera_stream_path}",
+                "http://127.0.0.1:4747/video",                           # DroidCam via USB (ADB forward)
+                f"http://{config.camera_ip}:8080/video",                  # IP Webcam (Play Store)
+                f"http://{config.camera_ip}:4747/mjpegfeed?640x480",     # DroidCam alternative path
+                "http://10.116.205.188:80/stream"                       # ESP32-CAM legacy fallback
+            ]
 
-                    buffer = bytearray()
-                    frame_count = 0
-                    last_fps_calc = time.monotonic()
+            connected = False
+            for stream_url in candidate_urls:
+                if self.stop_event.is_set():
+                    break
+                try:
+                    start_conn = time.perf_counter()
+                    with requests.get(
+                        stream_url,
+                        stream=True,
+                        headers={"Cache-Control": "no-cache", "User-Agent": "WAREBOT/1.0"},
+                        timeout=(1.5, 2.5)
+                    ) as resp:
+                        resp.raise_for_status()
+                        conn_latency = (time.perf_counter() - start_conn) * 1000.0
+                        self.online = True
+                        self.latency_ms = round(conn_latency, 1)
+                        self.last_error = None
+                        connected = True
+                        log_service.success(Subsystem.CAMERA, "STREAM_CONNECTED", f"Connected to camera stream at {stream_url} (HTTP {resp.status_code})")
 
-                    for chunk in resp.iter_content(chunk_size=32768):
-                        if self.stop_event.is_set():
-                            break
-                        if not chunk:
-                            continue
-                        buffer.extend(chunk)
+                        buffer = bytearray()
+                        frame_count = 0
+                        last_fps_calc = time.monotonic()
 
-                        # Find the LAST complete frame in the buffer (skipping all older frames!)
-                        last_e = buffer.rfind(JPEG_END)
-                        if last_e >= 0:
-                            last_s = buffer.rfind(JPEG_START, 0, last_e)
-                            if last_s >= 0:
-                                # We have a complete frame. Discard ALL bytes before it!
-                                if last_s > 0:
-                                    del buffer[:last_s]
-                                    last_e -= last_s
-                                    last_s = 0
+                        for chunk in resp.iter_content(chunk_size=4096):
+                            if self.stop_event.is_set():
+                                break
+                            if not chunk:
+                                continue
+                            buffer.extend(chunk)
 
-                                jpeg_bytes = bytes(buffer[:last_e + 2])
-                                del buffer[:last_e + 2]
+                            # Find newest complete JPEG frame
+                            last_e = buffer.rfind(JPEG_END)
+                            if last_e != -1:
+                                last_s = buffer.rfind(JPEG_START, 0, last_e)
+                                if last_s != -1:
+                                    jpeg_bytes = bytes(buffer[last_s:last_e + 2])
+                                    del buffer[:last_e + 2]
 
-                                # Decode only this freshest frame
-                                img = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-                                if img is not None:
-                                    now = time.time()
-                                    with self.lock:
-                                        self.latest_frame = img
-                                        self.latest_jpeg = jpeg_bytes
-                                        self.frame_id += 1
-                                        self.frame_time = now
-                                        self.last_seen = now
-                                    frame_count += 1
+                                    img = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+                                    if img is not None:
+                                        now = time.time()
+                                        with self.lock:
+                                            self.latest_frame = img
+                                            self.latest_jpeg = jpeg_bytes
+                                            self.frame_id += 1
+                                            self.frame_time = now
+                                            self.last_seen = now
+                                        frame_count += 1
 
-                                    now_m = time.monotonic()
-                                    if now_m - last_fps_calc >= 1.0:
-                                        self.fps = frame_count / (now_m - last_fps_calc)
-                                        frame_count = 0
-                                        last_fps_calc = now_m
+                                        now_m = time.monotonic()
+                                        if now_m - last_fps_calc >= 1.0:
+                                            self.fps = frame_count / (now_m - last_fps_calc)
+                                            frame_count = 0
+                                            last_fps_calc = now_m
+                                else:
+                                    del buffer[:last_e + 2]
 
-                        # Safety cap: prevent unbounded memory
-                        if len(buffer) > 500_000:
-                            s = buffer.rfind(JPEG_START)
-                            if s >= 0:
-                                del buffer[:s]
-                            else:
-                                buffer.clear()
+                            if len(buffer) > 100_000:
+                                s = buffer.rfind(JPEG_START)
+                                if s != -1:
+                                    del buffer[:s]
+                                else:
+                                    buffer.clear()
+                        # If loop exited cleanly, break out of candidate loop
+                        break
+                except Exception as err:
+                    continue  # Try next candidate
 
-            except Exception as err:
+            if not connected and not self.stop_event.is_set():
                 self.online = False
                 self.latency_ms = None
-                self.last_error = str(err)
-                if not self.stop_event.is_set():
-                    self.stop_event.wait(1.5)
+                self.last_error = f"Cannot reach camera at {config.camera_ip}:{config.camera_port}"
+                self.stop_event.wait(0.8)
 
     def _generate_simulation_frame(self):
         """Generates realistic synthetic 640x480 frame with timestamp and simulated bottle"""
@@ -217,15 +228,29 @@ class CameraService:
                 self.frame_id += 1
                 self.frame_time = time.time()
 
+    def set_annotated_jpeg(self, jpeg: Optional[bytes]):
+        with self.lock:
+            self.latest_annotated_jpeg = jpeg
+            self.annotated_time = time.time()
+
     async def generate_mjpeg_stream(self) -> AsyncGenerator[bytes, None]:
-        """Async generator yielding MJPEG multipart boundaries with zero queue lag"""
+        """Async generator yielding MJPEG multipart boundaries with direct in-frame YOLO box overlay"""
         last_yielded_id = -1
+        last_yield_time = time.monotonic()
         while not self.stop_event.is_set():
             with self.lock:
                 current_id = self.frame_id
-                jpeg = self.latest_jpeg
-            if jpeg is not None and current_id != last_yielded_id:
+                now_t = time.time()
+                # Yield annotated frame with green YOLO box if fresh (< 1.2s), else raw frame
+                if self.latest_annotated_jpeg is not None and (now_t - self.annotated_time <= 1.2):
+                    jpeg = self.latest_annotated_jpeg
+                else:
+                    jpeg = self.latest_jpeg
+            now_m = time.monotonic()
+            # Yield when new frame arrives, OR keep-alive every 0.3s so Chrome <img> parser never dies
+            if jpeg is not None and (current_id != last_yielded_id or (now_m - last_yield_time >= 0.3)):
                 last_yielded_id = current_id
+                last_yield_time = now_m
                 yield (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n"

@@ -10,13 +10,14 @@ import {
   Play,
   Square,
   Activity,
-  Layers
+  Layers,
+  Navigation
 } from 'lucide-react';
 
 export const CameraScreen: React.FC = () => {
-  const { telemetry, gatewayHost } = useRobotStore();
+  const { telemetry, gatewayHost, startMission, stopMission } = useRobotStore();
   const [isPlaying, setIsPlaying] = useState(true);
-  const [showOverlay, setShowOverlay] = useState(true);
+  const [showOverlay, setShowOverlay] = useState(false);
   const [streamKey, setStreamKey] = useState(Date.now());
   const [isImgLoaded, setIsImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
@@ -26,6 +27,9 @@ export const CameraScreen: React.FC = () => {
   const camInfo = telemetry?.camera;
   const devCamera = telemetry?.devices.camera;
   const detection = telemetry?.detection;
+  const mission = telemetry?.mission;
+  const isFollowing = mission?.state === 'FOLLOWING';
+  const targetName = detection?.selected_target || 'bottle';
 
   const streamUrl = `http://${gatewayHost}:8000/api/camera/stream?t=${streamKey}`;
 
@@ -34,6 +38,17 @@ export const CameraScreen: React.FC = () => {
     setImgError(false);
     setStreamKey(Date.now());
   };
+
+  useEffect(() => {
+    if (imgError) {
+      const timer = setTimeout(() => {
+        setIsImgLoaded(false);
+        setImgError(false);
+        setStreamKey(Date.now());
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [imgError]);
 
   const handleToggleFullscreen = () => {
     if (!videoContainerRef.current) return;
@@ -69,7 +84,28 @@ export const CameraScreen: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 flex-wrap gap-y-2">
+          {/* Autonomous Follow Button right on Camera screen */}
+          {isFollowing ? (
+            <button
+              onClick={() => stopMission()}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-accent-red/20 hover:bg-accent-red/30 border border-accent-red/60 text-xs font-bold text-accent-red transition-all shadow-md animate-pulse"
+              title="Stop Autonomous Following"
+            >
+              <Square className="w-3.5 h-3.5" />
+              <span>STOP PURSUIT</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => startMission(targetName)}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-accent-green hover:bg-green-500 text-black text-xs font-bold transition-all shadow-md active:scale-95"
+              title={`Start Autonomous Following of ${targetName.toUpperCase()}`}
+            >
+              <Navigation className="w-3.5 h-3.5 fill-black" />
+              <span>AUTO-FOLLOW ({targetName.toUpperCase()})</span>
+            </button>
+          )}
+
           {/* Overlay Toggle */}
           <button
             onClick={() => setShowOverlay(!showOverlay)}
@@ -117,6 +153,36 @@ export const CameraScreen: React.FC = () => {
         ref={videoContainerRef}
         className="relative w-full aspect-[4/3] max-h-[70vh] bg-surface-primary border border-surface-border rounded-xl overflow-hidden flex items-center justify-center select-none"
       >
+        {/* Quick Action Banner when target detected and not following */}
+        {detection?.target_visible && !isFollowing && (
+          <div className="absolute top-4 inset-x-0 mx-auto w-fit z-30 flex items-center space-x-3 bg-black/85 backdrop-blur-md px-4 py-2 rounded-full border border-accent-green shadow-xl">
+            <span className="w-2.5 h-2.5 rounded-full bg-accent-green animate-ping" />
+            <span className="text-xs font-mono font-bold text-white uppercase tracking-wider">
+              {detection.detection?.class_name || targetName} DETECTED
+            </span>
+            <button
+              onClick={() => startMission(targetName)}
+              className="px-3 py-1 bg-accent-green hover:bg-green-400 text-black text-xs font-black rounded-full transition-transform active:scale-95 flex items-center space-x-1"
+            >
+              <Navigation className="w-3 h-3 fill-black" />
+              <span>START CAR PURSUIT ▶</span>
+            </button>
+          </div>
+        )}
+
+        {/* Active Pursuit Status Banner */}
+        {isFollowing && (
+          <div className="absolute top-4 inset-x-0 mx-auto w-fit z-30 flex items-center space-x-3 bg-accent-blue/90 backdrop-blur-md px-4 py-2 rounded-full border border-blue-400 text-white text-xs font-mono font-bold shadow-xl">
+            <span className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
+            <span>PURSUING {targetName.toUpperCase()}: {mission?.current_step || 'Active'}</span>
+            <button
+              onClick={() => stopMission()}
+              className="px-2.5 py-0.5 bg-black/70 hover:bg-black text-accent-red border border-red-500/50 text-[11px] font-bold rounded-full transition-all"
+            >
+              HALT ⏹
+            </button>
+          </div>
+        )}
         {isPlaying ? (
           <>
             <img
@@ -159,18 +225,23 @@ export const CameraScreen: React.FC = () => {
               </div>
             )}
 
-            {/* SVG Dynamic Detection Overlay (Adaptive coordinate space) */}
+            {/* SVG Dynamic Detection Overlay (Adaptive coordinate space for 1280x720, 640x480, etc.) */}
             {showOverlay && isImgLoaded && detection?.target_visible && detection.detection && (() => {
               const [x1, y1, x2, y2] = detection.detection.box;
-              const vbW = Math.max(x2, 160) > 160 ? 640 : 160;
-              const vbH = vbW === 640 ? 480 : 120;
+              const detObj = detection.detection as any;
+              const vbW = detObj.frame_width || (Math.max(x2, 160) > 640 ? 1280 : (Math.max(x2, 160) > 160 ? 640 : 160));
+              const vbH = detObj.frame_height || (vbW === 1280 ? 720 : (vbW === 640 ? 480 : 120));
               const width = Math.max(1, x2 - x1);
               const height = Math.max(1, y2 - y1);
               const confPercent = (detection.detection.confidence * 100).toFixed(0);
-              const strokeW = vbW === 640 ? 3 : 1.5;
-              const fontSz = vbW === 640 ? 14 : 6;
-              const badgeH = vbW === 640 ? 20 : 9;
-              const badgeW = Math.max(vbW === 640 ? 120 : 48, detection.detection.class_name.length * (vbW === 640 ? 10 : 6) + 32);
+              
+              const scale = vbW / 640;
+              const strokeW = Math.max(2, Math.round(3 * scale));
+              const fontSz = Math.max(11, Math.round(14 * scale));
+              const badgeH = Math.max(16, Math.round(22 * scale));
+              const badgeW = Math.max(Math.round(110 * scale), Math.round(detection.detection.class_name.length * 10 * scale + 35 * scale));
+              const reticleR = Math.max(4, Math.round(6 * scale));
+              const crossL = Math.max(8, Math.round(12 * scale));
 
               return (
                 <svg
@@ -188,7 +259,7 @@ export const CameraScreen: React.FC = () => {
                       fill="none"
                       stroke="#22C55E"
                       strokeWidth={strokeW}
-                      strokeDasharray="6 3"
+                      strokeDasharray={`${6 * scale} ${3 * scale}`}
                     />
                     {/* Label badge */}
                     <rect
@@ -197,11 +268,11 @@ export const CameraScreen: React.FC = () => {
                       width={badgeW}
                       height={badgeH}
                       fill="#22C55E"
-                      rx={vbW === 640 ? 3 : 1.5}
+                      rx={Math.round(3 * scale)}
                     />
                     <text
-                      x={x1 + (vbW === 640 ? 6 : 2)}
-                      y={Math.max(fontSz + 2, y1 - (vbW === 640 ? 6 : 3))}
+                      x={x1 + Math.round(6 * scale)}
+                      y={Math.max(fontSz + 2, y1 - Math.round(6 * scale))}
                       fill="#000000"
                       fontSize={fontSz}
                       fontWeight="bold"
@@ -213,24 +284,24 @@ export const CameraScreen: React.FC = () => {
                     <circle
                       cx={detection.detection.center[0]}
                       cy={detection.detection.center[1]}
-                      r={vbW === 640 ? 5 : 2.5}
+                      r={reticleR}
                       fill="none"
                       stroke="#22C55E"
                       strokeWidth={strokeW}
                     />
                     <line
-                      x1={detection.detection.center[0] - (vbW === 640 ? 10 : 4)}
+                      x1={detection.detection.center[0] - crossL}
                       y1={detection.detection.center[1]}
-                      x2={detection.detection.center[0] + (vbW === 640 ? 10 : 4)}
+                      x2={detection.detection.center[0] + crossL}
                       y2={detection.detection.center[1]}
                       stroke="#22C55E"
                       strokeWidth={strokeW * 0.8}
                     />
                     <line
                       x1={detection.detection.center[0]}
-                      y1={detection.detection.center[1] - (vbW === 640 ? 10 : 4)}
+                      y1={detection.detection.center[1] - crossL}
                       x2={detection.detection.center[0]}
-                      y2={detection.detection.center[1] + (vbW === 640 ? 10 : 4)}
+                      y2={detection.detection.center[1] + crossL}
                       stroke="#22C55E"
                       strokeWidth={strokeW * 0.8}
                     />

@@ -21,7 +21,7 @@ STATUS_URL = f"http://{CAR_IP}/status"
 MODEL_PATH = "yolov8n.pt"
 BOTTLE_CLASS = 39
 
-STOP_DISTANCE_CM = 25.0
+STOP_DISTANCE_CM = 33.0
 
 # Detection settings
 YOLO_CONF = 0.25
@@ -297,7 +297,7 @@ class Camera:
                     self.connected = True
                     buffer = bytearray()
 
-                    for chunk in response.iter_content(chunk_size=32768):
+                    for chunk in response.iter_content(chunk_size=4096):
                         if self.stop_event.is_set():
                             break
 
@@ -306,18 +306,13 @@ class Camera:
 
                         buffer.extend(chunk)
 
-                        # Find the LAST complete frame in the buffer (skipping all older frames!)
+                        # Find the newest complete JPEG frame in the current buffer
                         last_e = buffer.rfind(JPEG_END)
-                        if last_e >= 0:
+                        if last_e != -1:
                             last_s = buffer.rfind(JPEG_START, 0, last_e)
-                            if last_s >= 0:
-                                # We have a complete frame. Discard ALL bytes before it!
-                                if last_s > 0:
-                                    del buffer[:last_s]
-                                    last_e -= last_s
-                                    last_s = 0
-
-                                jpeg_bytes = bytes(buffer[:last_e + 2])
+                            if last_s != -1:
+                                # Extract freshest complete frame, skipping any older backlog
+                                jpeg_bytes = bytes(buffer[last_s:last_e + 2])
                                 del buffer[:last_e + 2]
 
                                 image = cv2.imdecode(
@@ -330,12 +325,14 @@ class Camera:
                                         self.frame = image
                                         self.frame_id += 1
                                         self.frame_time = time.monotonic()
+                            else:
+                                del buffer[:last_e + 2]
 
                         # Safety cap: recover from malformed/oversized stream buffers.
-                        if len(buffer) > 500_000:
-                            start = buffer.rfind(JPEG_START)
-                            if start >= 0:
-                                del buffer[:start]
+                        if len(buffer) > 100_000:
+                            s = buffer.rfind(JPEG_START)
+                            if s != -1:
+                                del buffer[:s]
                             else:
                                 buffer.clear()
 

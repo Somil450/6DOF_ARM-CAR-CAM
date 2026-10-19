@@ -25,7 +25,7 @@ const uint16_t CAR_FEEDBACK_PORT = 5006;
 #define TRIG_PIN 32
 #define ECHO_PIN 33
 
-const float STOP_DISTANCE_CM = 25.0f;
+const float STOP_DISTANCE_CM = 33.0f;
 const float REVERSE_DISTANCE_CM = 20.0f;
 
 WebServer server(80);
@@ -437,15 +437,9 @@ void handleCommand() {
 
   if (cmd == "STOP") {
     pythonAllowsMovement = false;
-
-    // Don't cancel an active pickup or reverse sequence.
-    if (
-      carState != STATE_PICKUP_WAIT &&
-      carState != STATE_REVERSE
-    ) {
-      stopCar();
-      carState = STATE_IDLE;
-    }
+    stopCar();
+    carState = STATE_IDLE;
+    pickupSent = false;
 
     server.send(200, "text/plain", "STOPPED");
     Serial.println("STOPPED");
@@ -453,9 +447,8 @@ void handleCommand() {
   }
 
   if (cmd == "FORWARD") {
-    // Read distance
-    float d = readDistance();
-    currentDistance = d;
+    // Use cached median distance from background loop (instant response)
+    float d = currentDistance;
 
     // Only block if a valid obstacle is confirmed closer than STOP_DISTANCE_CM
     if (d > 0.0f && d <= STOP_DISTANCE_CM) {

@@ -6,6 +6,7 @@ import os
 import time
 import threading
 from typing import Optional, Dict, Any, List
+import cv2
 import numpy as np
 from backend.config import config
 from backend.schemas import Subsystem, DeviceStatus
@@ -28,7 +29,7 @@ COCO_NAMES = {
 }
 
 TARGET_MAP: Dict[str, Optional[List[int]]] = {
-    "bottle": [39],
+    "bottle": [39, 41, 75],             # Bottle (39), Cup (41), Vase/Jar (75) to prevent hand-occlusion drops
     "cup": [41],
     "glass": [40, 41],
     "wine glass": [40],
@@ -161,10 +162,10 @@ class VisionService:
 
     def get_telemetry(self) -> Dict[str, Any]:
         now = time.time()
-        # Hold detection for 0.7s to tolerate brief frame misses (from python_robot.py)
+        # Hold detection for 2.0s to tolerate brief frame misses and hand occlusions
         is_active = (
             self.latest_detection is not None
-            and (now - self.last_detection_time <= 0.7)
+            and (now - self.last_detection_time <= 2.0)
             and self.detection_hits >= 1
         )
         
@@ -242,6 +243,7 @@ class VisionService:
                     verbose=False
                 )
 
+                h, w = frame.shape[:2]
                 best_detection = None
                 detections_list = []
 
@@ -252,17 +254,37 @@ class VisionService:
                         cls_id = int(box.cls[0])
                         cls_name = self.model.names.get(cls_id, f"cls_{cls_id}")
                         x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                        bw, bh = x2 - x1, y2 - y1
+                        area = bw * bh
+
+                        # Filter out tiny optical artifacts/noise (must be at least 20px wide/high)
+                        if bw < 20 or bh < 25 or area < 600:
+                            continue
+
+                        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                        norm_cx = round(cx / max(1, w), 4)
+                        norm_cy = round(cy / max(1, h), 4)
 
                         det = {
                             "class_id": cls_id,
                             "class_name": cls_name,
                             "confidence": round(conf, 3),
                             "box": [x1, y1, x2, y2],
-                            "center": [(x1 + x2) // 2, (y1 + y2) // 2],
-                            "area": (x2 - x1) * (y2 - y1),
+                            "center": [cx, cy],
+                            "area": area,
+                            "frame_width": w,
+                            "frame_height": h,
+                            "norm_center": [norm_cx, norm_cy],
+                            "norm_box": [
+                                round(x1 / max(1, w), 4),
+                                round(y1 / max(1, h), 4),
+                                round(x2 / max(1, w), 4),
+                                round(y2 / max(1, h), 4)
+                            ],
                         }
                         detections_list.append(det)
 
+                        # Prefer highest confidence foreground detection
                         if best_detection is None or conf > best_detection["confidence"]:
                             best_detection = det
 
@@ -277,8 +299,32 @@ class VisionService:
                         self.latest_detection = best_detection
                         self.all_detections = detections_list
                         self.last_detection_time = now
+
+                        # Burn pixel-perfect bounding box directly into video stream
+                        try:
+                            ann = frame.copy()
+                            x1, y1, x2, y2 = best_detection["box"]
+                            # Clean high-visibility green bounding box (#22C55E -> BGR: 94, 197, 34)
+                            cv2.rectangle(ann, (x1, y1), (x2, y2), (94, 197, 34), 3)
+                            label = f"{best_detection['class_name'].upper()} {int(best_detection['confidence']*100)}%"
+                            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                            # Label badge background
+                            cv2.rectangle(ann, (x1, max(0, y1 - th - 12)), (x1 + tw + 14, y1), (94, 197, 34), -1)
+                            # Label text
+                            cv2.putText(ann, label, (x1 + 7, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                            # Center reticle & crosshair
+                            cx, cy = best_detection["center"]
+                            cv2.circle(ann, (cx, cy), 6, (94, 197, 34), 2)
+                            cv2.drawMarker(ann, (cx, cy), (94, 197, 34), cv2.MARKER_CROSS, 22, 2)
+
+                            ret, ann_jpeg = cv2.imencode(".jpg", ann, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                            if ret:
+                                camera_service.set_annotated_jpeg(ann_jpeg.tobytes())
+                        except Exception:
+                            pass
                     else:
-                        if now - self.last_detection_time > 0.7:
+                        camera_service.set_annotated_jpeg(None)
+                        if now - self.last_detection_time > 2.0:
                             self.detection_hits = 0
                             self.latest_detection = None
                             self.all_detections = []
