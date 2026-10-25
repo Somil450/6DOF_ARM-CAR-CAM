@@ -4,8 +4,8 @@
 
   Wi-Fi: Somil's A35
   Camera IP: DHCP; check Serial Monitor at 115200 baud
-  CAR IP: 10.116.205.44 (display only)
-  ARM IP: 10.116.205.193 (display only)
+  CAR IP: 10.228.168.44 (display only)
+  ARM IP: 10.228.168.193 (display only)
 
   Endpoints:
     /         Live video page
@@ -21,8 +21,8 @@
 const char* WIFI_SSID = "Somil's A35";
 const char* WIFI_PASSWORD = "somil@12";
 
-IPAddress ARM_IP(10, 116, 205, 193);
-IPAddress CAR_IP(10, 116, 205, 44);
+IPAddress ARM_IP(10, 228, 168, 193);
+IPAddress CAR_IP(10, 228, 168, 44);
 
 // ---------------- AI Thinker camera pins ----------------
 #define PWDN_GPIO_NUM     32

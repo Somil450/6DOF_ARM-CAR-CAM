@@ -15,7 +15,7 @@ const char* WIFI_PASSWORD = "somil@12";
 // ARM IP IS ASSIGNED AUTOMATICALLY BY WIFI (DHCP)
 // ============================================================
 
-IPAddress CAR_IP(10, 116, 205, 44);
+IPAddress CAR_IP(10, 228, 168, 44);
 IPAddress CAMERA_IP(10, 116, 205, 188);
 
 // UDP PORTS

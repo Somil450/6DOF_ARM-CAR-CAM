@@ -110,7 +110,7 @@ class CameraService:
                 "http://127.0.0.1:4747/video",                           # DroidCam via USB (ADB forward)
                 f"http://{config.camera_ip}:8080/video",                  # IP Webcam (Play Store)
                 f"http://{config.camera_ip}:4747/mjpegfeed?640x480",     # DroidCam alternative path
-                "http://10.116.205.188:80/stream"                       # ESP32-CAM legacy fallback
+                "http://10.228.168.104:8080/video"                      # IP Webcam fallback
             ]
 
             connected = False

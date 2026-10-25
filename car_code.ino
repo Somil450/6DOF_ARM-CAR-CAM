@@ -10,7 +10,7 @@
 const char* WIFI_SSID = "Somil's A35";
 const char* WIFI_PASSWORD = "somil@12";
 
-IPAddress ARM_IP(10, 116, 205, 193);
+IPAddress ARM_IP(10, 228, 168, 193);
 
 const uint16_t ARM_COMMAND_PORT = 5005;
 const uint16_t CAR_FEEDBACK_PORT = 5006;

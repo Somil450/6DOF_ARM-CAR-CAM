@@ -17,9 +17,9 @@ export const SettingsScreen: React.FC = () => {
   const { gatewayHost, setGatewayHost, updateSettings, telemetry, testDevice } = useRobotStore();
 
   const [localGatewayHost, setLocalGatewayHost] = useState(gatewayHost);
-  const [carIp, setCarIp] = useState('10.116.205.44');
-  const [armIp, setArmIp] = useState('10.116.205.193');
-  const [cameraIp, setCameraIp] = useState('10.116.205.188');
+  const [carIp, setCarIp] = useState('10.228.168.44');
+  const [armIp, setArmIp] = useState('10.228.168.193');
+  const [cameraIp, setCameraIp] = useState('10.228.168.104');
   
   const [stopDistance, setStopDistance] = useState(25.0);
   const [reverseDistance, setReverseDistance] = useState(20.0);

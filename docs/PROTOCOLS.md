@@ -6,8 +6,8 @@ All devices connect to a shared local Wi-Fi network (AP or router). Default subn
 | Device / Component | IP Address (Default) | Port(s) | Protocol | Role |
 |---|---|---|---|---|
 | **Robotics Gateway (PC)** | Localhost / LAN IP | `8000` | HTTP / WebSocket | Aggregator, Safety Controller, Vision Manager |
-| **Car ESP32** | `10.116.205.44` | `80` (HTTP), `5006` (UDP RX) | HTTP REST, UDP | Motors & Ultrasonic Sensor |
-| **Arm ESP32** | `10.116.205.193` | `4242` (UDP RX), `5005` (UDP RX) | UDP Raw Binary, UDP ASCII | PCA9685 6-DOF Servos |
+| **Car ESP32** | `10.228.168.44` | `80` (HTTP), `5006` (UDP RX) | HTTP REST, UDP | Motors & Ultrasonic Sensor |
+| **Arm ESP32** | `10.228.168.193` | `4242` (UDP RX), `5005` (UDP RX) | UDP Raw Binary, UDP ASCII | PCA9685 6-DOF Servos |
 | **ESP32-CAM** | `10.116.205.188` | `80` (HTTP) | HTTP MJPEG Stream | Low-latency 160x120 QQVGA |
 | **PWA Frontend** | Browser Client | `5173` (Dev) / `8000` (Prod) | HTTP, WebSocket | UI / Operator Station |
 
