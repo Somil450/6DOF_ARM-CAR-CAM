@@ -29,9 +29,9 @@ This document provides a comprehensive technical audit of the five core source f
 
 ### Network Configuration
 - **Wi-Fi Mode**: Station (`WIFI_STA`), Sleep disabled (`setSleep(false)`), Auto-reconnect enabled.
-- **SSID / Password**: Configured as `"Somil's A35"` / `"somil@12"`.
-- **IP Assignment**: DHCP. Default tested IP: `10.228.168.44`.
-- **Target Arm IP**: `10.228.168.193` (hardcoded in firmware).
+- **SSID / Password**: Configured as `"Yash"` / `"Leum9932"`.
+- **IP Assignment**: DHCP. Default tested IP: `10.172.189.44`.
+- **Target Arm IP**: `10.172.189.193` (hardcoded in firmware).
 - **Ports**:
   - HTTP Server: Port 80
   - Arm Command UDP Port: `5005` (transmits commands to Arm)

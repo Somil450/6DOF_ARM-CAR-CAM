@@ -6,9 +6,9 @@ All devices connect to a shared local Wi-Fi network (AP or router). Default subn
 | Device / Component | IP Address (Default) | Port(s) | Protocol | Role |
 |---|---|---|---|---|
 | **Robotics Gateway (PC)** | Localhost / LAN IP | `8000` | HTTP / WebSocket | Aggregator, Safety Controller, Vision Manager |
-| **Car ESP32** | `10.228.168.44` | `80` (HTTP), `5006` (UDP RX) | HTTP REST, UDP | Motors & Ultrasonic Sensor |
-| **Arm ESP32** | `10.228.168.193` | `4242` (UDP RX), `5005` (UDP RX) | UDP Raw Binary, UDP ASCII | PCA9685 6-DOF Servos |
-| **ESP32-CAM** | `10.116.205.188` | `80` (HTTP) | HTTP MJPEG Stream | Low-latency 160x120 QQVGA |
+| **Car ESP32** | `10.172.189.44` | `80` (HTTP), `5006` (UDP RX) | HTTP REST, UDP | Motors & Ultrasonic Sensor |
+| **Arm ESP32** | `10.172.189.193` | `4242` (UDP RX), `5005` (UDP RX) | UDP Raw Binary, UDP ASCII | PCA9685 6-DOF Servos |
+| **Mobile Camera (DroidCam)** | `10.172.189.233` | `4747` (HTTP) | HTTP MJPEG Stream | DroidCam on Android Phone |
 | **PWA Frontend** | Browser Client | `5173` (Dev) / `8000` (Prod) | HTTP, WebSocket | UI / Operator Station |
 
 ---
@@ -117,7 +117,7 @@ The Robotics Gateway acts as a central asynchronous mediator between the browser
       "gateway": { "online": true, "latency_ms": 0 },
       "car": { "online": true, "latency_ms": 12.4, "ip": "10.116.205.44", "last_seen": 1728920000.1 },
       "arm": { "online": true, "latency_ms": 8.1, "ip": "10.116.205.193", "last_seen": 1728920000.0 },
-      "camera": { "online": true, "latency_ms": 15.2, "ip": "10.116.205.188", "last_seen": 1728920000.05 },
+      "camera": { "online": true, "latency_ms": 15.2, "ip": "10.172.189.233", "last_seen": 1728920000.05 },
       "vision": { "online": true, "process_running": true, "fps": 24.5 }
     },
     "telemetry": {

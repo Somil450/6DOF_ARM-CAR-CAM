@@ -7,16 +7,16 @@
 // WIFI SETTINGS
 // ============================================================
 
-const char* WIFI_SSID = "Somil's A35";
-const char* WIFI_PASSWORD = "somil@12";
+const char* WIFI_SSID = "Yash";
+const char* WIFI_PASSWORD = "Leum9932";
 
 // ============================================================
 // NETWORK SETTINGS
 // ARM IP IS ASSIGNED AUTOMATICALLY BY WIFI (DHCP)
 // ============================================================
 
-IPAddress CAR_IP(10, 228, 168, 44);
-IPAddress CAMERA_IP(10, 116, 205, 188);
+IPAddress CAR_IP(10, 172, 189, 44);
+IPAddress CAMERA_IP(10, 172, 189, 233);
 
 // UDP PORTS
 const uint16_t SLIDER_PORT = 4242;

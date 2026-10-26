@@ -12,9 +12,9 @@ Inspection of the physical firmware (`car_code.ino`, `robot_arm.ino`, `camera.in
 | Device | Role | Microcontroller / Driver | Default IP | Protocol & Ports |
 |---|---|---|---|---|
 | **Robotics Gateway** | Central safety mediator & API hub | PC (FastAPI + Uvicorn) | `0.0.0.0` / LAN | HTTP `:8000`, WS `/ws/telemetry` |
-| **Car Controller** | L298N motors & HC-SR04 ultrasonic | ESP32 Dev Module | `10.228.168.44` | HTTP Port `80`, UDP `5006` (RX) |
-| **Robotic Arm** | PCA9685 6-DOF Servos | ESP32 Dev Module | `10.228.168.193` | UDP `4242` (Sliders), UDP `5005` (Cmd) |
-| **ESP32-CAM** | Low-latency MJPEG video | AI-Thinker OV2640 | `10.116.205.188` | HTTP Port `80` (`/stream`, `/capture`) |
+| **Car Controller** | L298N motors & HC-SR04 ultrasonic | ESP32 Dev Module | `10.172.189.44` | HTTP Port `80`, UDP `5006` (RX) |
+| **Robotic Arm** | PCA9685 6-DOF Servos | ESP32 Dev Module | `10.172.189.193` | UDP `4242` (Sliders), UDP `5005` (Cmd) |
+| **Mobile Camera** | DroidCam MJPEG video | Android Phone | `10.172.189.233` | HTTP Port `4747` (`/video`) |
 
 ### Car Hardware Pinout & Endpoints (`car_code.ino`)
 - **L298N Motors**: `IN1=25`, `IN2=26`, `IN3=27`, `IN4=14`

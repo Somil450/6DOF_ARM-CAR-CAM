@@ -8,16 +8,16 @@ from typing import List
 
 class DeviceConfig(BaseModel):
     # Network Addresses (discovered from existing firmware & Python scripts)
-    car_ip: str = "10.228.168.44"
+    car_ip: str = "10.172.189.44"
     car_port: int = 80
     
-    arm_ip: str = "10.228.168.193"
+    arm_ip: str = "10.172.189.193"
     arm_slider_port: int = 4242
     arm_command_port: int = 5005
     arm_feedback_port: int = 5006
     
-    camera_ip: str = "10.228.168.104"
-    camera_port: int = 8080
+    camera_ip: str = "10.172.189.233"
+    camera_port: int = 4747
     camera_stream_path: str = "/video"
     camera_capture_path: str = "/shot.jpg"
     

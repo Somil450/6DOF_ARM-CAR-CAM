@@ -9,11 +9,11 @@ from ultralytics import YOLO
 # WAREBOT CONFIGURATION
 # ============================================================
 
-CAMERA_IP = "10.228.168.104"
-CAR_IP = "10.228.168.44"
-ARM_IP = "10.228.168.193"
+CAMERA_IP = "10.172.189.233"
+CAR_IP = "10.172.189.44"
+ARM_IP = "10.172.189.193"
 
-CAMERA_URL = f"http://{CAMERA_IP}:8080/video"
+CAMERA_URL = f"http://{CAMERA_IP}:4747/video"
 COMMAND_URL = f"http://{CAR_IP}/command"
 DISTANCE_URL = f"http://{CAR_IP}/distance"
 STATUS_URL = f"http://{CAR_IP}/status"

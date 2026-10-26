@@ -302,7 +302,7 @@ export const CarControlScreen: React.FC = () => {
             )}
           </div>
           <div className="text-[11px] font-mono text-text-muted truncate">
-            IP: {devCar?.ip || '10.228.168.44'}:80
+            IP: {devCar?.ip || '10.172.189.44'}:80
           </div>
         </div>
       </div>
